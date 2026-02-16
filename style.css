@@ -1,0 +1,107 @@
+:root {
+    --glass: rgba(255, 255, 255, 0.96);
+    --primary: #6366f1;
+    --accent: #a855f7;
+    --danger: #ff4757;
+    --success: #2ed573;
+    --dark: #1e293b;
+}
+
+body {
+    font-family: 'Inter', sans-serif;
+    background: linear-gradient(135deg, #f0f2f5 0%, #c3cfe2 100%);
+    background-attachment: fixed;
+    margin: 0; padding-bottom: 160px; color: var(--dark);
+}
+
+.container { max-width: 550px; margin: 0 auto; padding: 15px; }
+
+/* Навигация */
+.tabs {
+    display: flex; background: rgba(255,255,255,0.85); backdrop-filter: blur(12px);
+    padding: 8px; border-radius: 22px; margin-bottom: 25px;
+    position: sticky; top: 15px; z-index: 1000; box-shadow: 0 10px 25px rgba(0,0,0,0.08);
+}
+.tab-btn {
+    flex: 1; padding: 15px; border: none; background: transparent;
+    cursor: pointer; border-radius: 16px; font-weight: 800; color: #64748b; font-size: 16px;
+    transition: 0.3s;
+}
+.tab-btn.active { background: white; color: var(--primary); box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
+
+/* Карточки */
+.card {
+    background: var(--glass); border-radius: 30px; padding: 25px;
+    margin-bottom: 20px; box-shadow: 0 15px 35px rgba(0,0,0,0.07);
+    border: 1px solid rgba(255,255,255,0.8);
+    transition: 0.3s;
+}
+.main-card { border: 2.5px solid var(--primary); }
+.product-hidden { opacity: 0.5; border: 1px dashed #999; filter: grayscale(1); }
+
+.card-header { display: flex; justify-content: space-between; align-items: center; }
+.card-header b { font-size: 22px; display: flex; align-items: center; gap: 10px; cursor: pointer; flex: 1; }
+
+.header-controls { display: flex; gap: 8px; align-items: center; }
+.btn-control {
+    width: 36px; height: 36px; border-radius: 10px; border: none;
+    background: #f1f5f9; cursor: pointer; font-size: 16px;
+    display: flex; align-items: center; justify-content: center;
+}
+
+/* Формы и сетка */
+.form-grid { display: grid; grid-template-columns: 85px 1fr; gap: 15px; margin-bottom: 15px; }
+.flex-row { display: flex; gap: 12px; align-items: center; }
+
+input, select, textarea { 
+    padding: 16px; border-radius: 18px; border: 1.5px solid #e2e8f0; 
+    outline: none; width: 100%; box-sizing: border-box; background: white;
+    font-family: inherit;
+}
+
+/* Кнопки */
+.btn-add-main { background: var(--primary); color: white; border: none; padding: 16px; border-radius: 20px; font-weight: 900; cursor: pointer; transition: 0.2s; }
+.btn-add-main:active { transform: scale(0.96); }
+
+.btn-mini { width: 40px; height: 40px; border-radius: 12px; border: none; background: #f1f5f9; cursor: pointer; font-weight: bold; }
+
+.badge-count {
+    background: var(--danger); color: white; border-radius: 50%;
+    width: 24px; height: 24px; display: inline-flex; align-items: center; justify-content: center;
+    font-size: 13px; font-weight: bold; margin-left: 5px;
+}
+
+/* Детализация */
+.details { margin-top: 15px; border-top: 2px solid #f1f5f9; padding-top: 15px; }
+
+.history-item, .order-item { 
+    display: flex; justify-content: space-between; align-items: center; 
+    background: #f8fafc; padding: 15px; border-radius: 18px; margin-bottom: 10px; 
+}
+
+.total-badge { 
+    background: var(--dark); color: white; padding: 20px; border-radius: 22px; 
+    margin-top: 15px; font-weight: 800; display: flex; justify-content: space-between; 
+}
+.small-total { font-size: 12px; opacity: 0.7; text-transform: uppercase; letter-spacing: 1px; }
+
+/* Футер */
+.footer-panel { 
+    position: fixed; bottom: 0; left: 0; right: 0; 
+    background: var(--dark); padding: 20px; color: white; z-index: 2000;
+    box-shadow: 0 -10px 30px rgba(0,0,0,0.2);
+}
+.cash-container { display: flex; align-items: center; justify-content: center; gap: 15px; font-weight: bold; }
+.cash-container input { 
+    width: 130px; background: rgba(255,255,255,0.1); color: white; border: 2px solid rgba(255,255,255,0.2); 
+    text-align: center; font-size: 24px; border-radius: 15px; padding: 10px;
+}
+
+/* Специальные кнопки отчета */
+.btn-copy { background: white; border: 2.5px dashed var(--primary); color: var(--primary); padding: 16px; border-radius: 20px; font-weight: 800; cursor: pointer; flex: 1; }
+.btn-send-report { background: var(--success); color: white; border: none; padding: 16px; border-radius: 20px; font-weight: 800; flex: 1; cursor: pointer; }
+.btn-danger-outline { background: transparent; color: var(--danger); border: 2.5px solid var(--danger); padding: 16px; border-radius: 20px; font-weight: 800; cursor: pointer; margin-bottom: 10px; }
+
+/* Список заказов */
+ul { list-style: none; padding: 0; }
+li { margin-bottom: 5px; }

@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NEON ADMIN PRO</title>
+    <script src="https://www.gstatic.com/firebasejs/9.17.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.17.1/firebase-database-compat.js"></script>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div class="container">
+    <div class="tabs">
+        <button class="tab-btn active" id="btn-warehouse" onclick="switchTab('warehouse')">📦 Склад</button>
+        <button class="tab-btn" id="btn-customers" onclick="switchTab('customers')">👥 Заказчики</button>
+        <button class="tab-btn" id="btn-incoming" onclick="switchTab('incoming')">
+            🔔 <span id="new-orders-badge" class="badge-count">0</span>
+        </button>
+    </div>
+
+    <div id="warehouse" class="tab-content">
+        <div class="card main-card">
+            <h3>Добавить товар</h3>
+            <div class="form-grid">
+                <input type="text" id="p-icon" placeholder="📦" value="📦">
+                <input type="text" id="p-name" placeholder="Название товара">
+                <input type="number" id="p-qty" placeholder="Нач. кол-во">
+                <input type="number" id="p-price" placeholder="Цена за ед.">
+            </div>
+            <button class="btn-add-main" onclick="addProduct()">ДОБАВИТЬ НА СКЛАД</button>
+        </div>
+        
+        <div id="products-list"></div>
+        
+        <div id="warehouse-footer"></div>
+        
+        <button class="btn-copy" onclick="copyWarehouse()" style="margin-top:10px; width:100%">📋 Копировать остатки</button>
+    </div>
+
+    <div id="customers" class="tab-content" style="display:none">
+        <div class="card main-card">
+            <h3>Новый заказчик</h3>
+            <div class="flex-row">
+                <input type="text" id="c-name" placeholder="Имя заказчика" style="flex:1;">
+                <button class="btn-add-main" style="width:70px" onclick="addCustomer()">+</button>
+            </div>
+        </div>
+
+        <div id="customers-list"></div>
+        
+        <div id="customers-revenue-box"></div>
+
+        <div class="flex-row" style="margin-top:15px">
+            <button class="btn-copy" onclick="copyOrders()">📋 Копия текста</button>
+            <button class="btn-send-report" onclick="sendFullReport()">ОТПРАВИТЬ ПОЛНЫЙ ОТЧЕТ</button>
+        </div>
+    </div>
+
+    <div id="incoming" class="tab-content" style="display:none">
+        <h3 style="text-align:center">🔔 Входящие заказы</h3>
+        <div id="incoming-orders-list"></div>
+    </div>
+</div>
+
+<div class="footer-panel">
+    <div class="cash-container">
+        <span>💵 КАССА (на руках):</span>
+        <input type="number" id="cash-input" oninput="saveCash()" placeholder="0">
+        <span>₽</span>
+    </div>
+</div>
+
+<script src="script.js"></script>
+</body>
+</html>
