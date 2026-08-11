@@ -111,6 +111,13 @@ function buildBuildBar() {
   bar.innerHTML = "";
 
   const buildRow = makeBuildBarSection(bar, "buildBarSectionBuildings", "Здания");
+  // ИИ №35: цена на кнопке — через getBuildingCost() (01-config-state.js),
+  // а не def.cost напрямую, т.к. у refinery цена растёт с каждой
+  // построенной станцией (см. комментарий там же). Текст на кнопке,
+  // выставленный здесь, актуален только в момент сборки ленты — далее его
+  // держит в актуальном состоянии refreshBuildBarPrices() (ниже),
+  // вызываемая каждый тик из renderHUD().
+  const barPlayer = State.players[localPlayerId];
   Object.entries(BuildingDefs).forEach(([key, def]) => {
     if (key === "commandCenter") return; // штаб выдаётся один раз при старте, вручную не строится
     const btn = document.createElement("button");
@@ -119,7 +126,7 @@ function buildBuildBar() {
     btn.dataset.category = "building";
     btn.innerHTML = `<span class="buildBtnIcon">${buildingIconGlyph(key)}</span>
       <span class="buildBtnLabel">${def.label}</span>
-      <small>${def.cost} кр.</small>`;
+      <small>${getBuildingCost(key, barPlayer)} кр.</small>`;
     btn.onclick = () => tryStartBuilding(key);
     buildRow.appendChild(btn);
   });
@@ -238,6 +245,26 @@ function refreshBuildBarActiveState() {
   });
 }
 
+// ИИ №35: держит цену на кнопках построек (только здания, dataset.buildKey —
+// у кнопок юнитов вместо этого dataset.unitKey, см. buildBuildBar) в
+// актуальном состоянии — нужна отдельно от buildBuildBar(), потому что та
+// вызывается один раз при старте (13-bootstrap.js), а цена refinery
+// меняется в рантайме после каждой постройки станции (см.
+// getBuildingCost/REFINERY_PRICE_STEP, 01-config-state.js). Вызывается
+// каждый тик из renderHUD() — дёшево (перебор ~10 кнопок), тот же принцип,
+// что и у refreshUnitLockState() рядом.
+function refreshBuildBarPrices() {
+  const bar = document.getElementById("buildBar");
+  if (!bar) return;
+  const player = State.players[localPlayerId];
+  if (!player) return;
+  bar.querySelectorAll(".buildBtn[data-build-key]").forEach(btn => {
+    const key = btn.dataset.buildKey;
+    const small = btn.querySelector("small");
+    if (small) small.textContent = `${getBuildingCost(key, player)} кр.`;
+  });
+}
+
 // ИИ №28 (перенесено из 16-tech-unlock.js при слиянии в buildBuildBar,
 // ИИ №30): пересчёт лок-состояния кнопок юнитов — вызывается из
 // renderHUD каждый тик. Дёшево (перебор ~10 типов юнитов x зданий
@@ -266,7 +293,8 @@ function tryStartBuilding(key) {
   if (key === "commandCenter") return; // штаб не строится вручную
   const def = BuildingDefs[key];
   const player = State.players[localPlayerId];
-  if (player.credits < def.cost) { logMsg("Недостаточно кредитов", "warn"); return; }
+  // ИИ №35: getBuildingCost() вместо def.cost — см. 01-config-state.js.
+  if (player.credits < getBuildingCost(key, player)) { logMsg("Недостаточно кредитов", "warn"); return; }
   State.buildMode = { type: key, valid: false };
   refreshBuildBarActiveState();
   logMsg(`Режим размещения: ${def.label} — ЛКМ подтвердить, ПКМ/Esc отменить (на телефоне: тап подтверждает, второй палец отменяет)`);
@@ -374,20 +402,35 @@ function confirmBuildPlacement() {
     logMsg(outOfSight ? "Нельзя строить вне видимости — сначала разведайте эту зону" : "Здесь строить нельзя — слишком близко к другому объекту", "warn");
     return;
   }
-  if (player.credits < def.cost) {
+  // ИИ №35: getBuildingCost() вместо def.cost — цена refinery растёт с
+  // каждой построенной станцией (см. 01-config-state.js). cost считаем
+  // ОДИН раз в переменную — иначе после инкремента refineryBuiltCount ниже
+  // сообщение в логе показало бы уже НОВУЮ (будущую) цену вместо той,
+  // что реально списалась только что.
+  const cost = getBuildingCost(key, player);
+  if (player.credits < cost) {
     logMsg("Недостаточно кредитов", "warn");
     State.buildMode = null;
     return;
   }
 
-  player.credits -= def.cost;
+  player.credits -= cost;
   const id = uid("b");
   State.buildings[id] = {
     id, ownerId: localPlayerId, type: key,
     x: wx, y: wy, hp: def.hp, maxHp: def.hp,
     rallyX: wx + 40, rallyY: wy + 40, buildQueue: [],
   };
-  logMsg(`Построено: ${def.label}`);
+  // ИИ №35: инкремент СЧЁТЧИКА ПОКУПОК (не текущего числа станций на карте —
+  // см. обоснование в 01-config-state.js) сразу после успешной постройки,
+  // чтобы следующий вызов getBuildingCost() для refinery вернул цену уже
+  // на REFINERY_PRICE_STEP выше.
+  if (key === "refinery") {
+    player.refineryBuiltCount = (player.refineryBuiltCount || 0) + 1;
+    logMsg(`Построено: ${def.label} (следующая станция подорожает на ${REFINERY_PRICE_STEP} кр. — теперь ${getBuildingCost(key, player)} кр.)`);
+  } else {
+    logMsg(`Построено: ${def.label}`);
+  }
   State.buildMode = null;
   refreshBuildBarActiveState();
 }
@@ -461,6 +504,9 @@ function renderHUD() {
   // 16-tech-unlock.js (ИИ №28) — перенесено сюда вместе с самой функцией
   // блокировки, обёртка больше не нужна (см. футер 16-tech-unlock.js).
   refreshUnitLockState();
+  // ИИ №35: держит цену refinery на кнопке актуальной (см. её определение
+  // выше) — дешёвая операция, тот же тик, что и refreshUnitLockState().
+  refreshBuildBarPrices();
 }
 
 function renderSelectionPanel() {
