@@ -41,12 +41,22 @@
 function mapWidthPx() { return GameConfig.mapTilesW * GameConfig.tileSize; }
 function mapHeightPx() { return GameConfig.mapTilesH * GameConfig.tileSize; }
 
-// Отступ штаба от края карты. 300/300 — те же числа, что раньше были
-// хардкодом позиции игрока (js/05-init-world.js) в углу 0, так что угол 0
-// после патча выглядит так же, как и раньше (не только "новый" рандом, но
-// и старое поведение остаётся одним из 4 равновероятных исходов).
-const CORNER_MARGIN_X = 300;
-const CORNER_MARGIN_Y = 300;
+// ИИ №40 (по прямому запросу пользователя: "чтобы противники не спавнились
+// слишком близко"): раньше отступ был фиксированным хардкодом 300/300px,
+// подобранным под старую маленькую карту (1920x1280, см. 01-config-state.js).
+// На новой большой карте (4480x3200) с тем же 300px отступом штабы всё
+// ещё стояли бы у самого края — сам отступ размер проблемы не решал,
+// проблема была именно в тесноте самой карты. Теперь отступ считается
+// как ДОЛЯ размера карты (а не абсолютное число px) — так он масштабируется
+// вместе с картой на будущее, если её размер снова поменяют, и всегда
+// оставляет одинаковый ОТНОСИТЕЛЬНЫЙ запас от края независимо от текущих
+// mapTilesW/H. 12% от меньшей стороны карты — угол смещён заметно внутрь
+// от самого края (граница карты теперь ещё и физическая стена, см.
+// 23-map-bounds.js, штаб не должен стоять вплотную к ней).
+function cornerMarginPx() {
+  const minSidePx = Math.min(mapWidthPx(), mapHeightPx());
+  return Math.max(300, Math.round(minSidePx * 0.12));
+}
 
 // Смещения зданий/юнита от штаба — ВСЕГДА направлены "к центру карты" (см.
 // signX/signY ниже), чтобы после мирроринга по углам ничего не вылезало
@@ -66,8 +76,9 @@ const CORNER_SIGNS = [
 
 function cornerLayout(idx) {
   const { signX, signY } = CORNER_SIGNS[idx];
-  const hqX = signX > 0 ? CORNER_MARGIN_X : mapWidthPx() - CORNER_MARGIN_X;
-  const hqY = signY > 0 ? CORNER_MARGIN_Y : mapHeightPx() - CORNER_MARGIN_Y;
+  const marginPx = cornerMarginPx();
+  const hqX = signX > 0 ? marginPx : mapWidthPx() - marginPx;
+  const hqY = signY > 0 ? marginPx : mapHeightPx() - marginPx;
   return {
     hq: { x: hqX, y: hqY },
     refinery: {
