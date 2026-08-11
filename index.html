@@ -326,6 +326,25 @@
 
   #selPanel{font-size:12px;display:flex;flex-direction:column;min-height:0;}
   #selPanel .selHead{color:var(--accent-gdi);border-bottom:1px solid var(--hud-line);padding-bottom:4px;margin-bottom:4px;letter-spacing:.5px;}
+  /* ИИ: две кнопки-заглушки "+"/"−" под будущую регулировку зума камеры —
+     по прямому запросу пользователя добавлена ТОЛЬКО разметка/стиль,
+     функциональность (сам зум) сознательно не реализована, это отдельная
+     задача. Вынесено в отдельный CSS-класс (а не инлайн, как aiAdviceBtn
+     ниже) — сразу по комментарию из ИИ №4 про "если появится больше
+     подобных элементов", вот он и появился. */
+  .selZoomRow{display:flex;gap:6px;margin-bottom:8px;}
+  .selZoomBtn{
+    flex:1 1 0;
+    font-family:var(--mono);font-size:15px;font-weight:bold;line-height:1;
+    padding:7px 0;
+    border:1px solid var(--hud-line);
+    background:linear-gradient(180deg,#212b1a,#181f13);
+    color:var(--accent-gdi);
+    cursor:pointer;border-radius:2px;
+    transition:border-color .15s, color .15s, background .15s;
+  }
+  .selZoomBtn:hover{border-color:var(--accent-gdi);color:var(--accent-gdi-bright);background:linear-gradient(180deg,#28351f,#1c2416);}
+  .selZoomBtn:active{transform:scale(.94);}
   #selContent{overflow-y:auto;flex:0 1 auto;}
   .selEmpty{color:var(--text-faint);padding:10px 2px;line-height:1.6;}
   .selEmpty span{font-size:10px;color:var(--text-faint);}
@@ -982,6 +1001,14 @@
 
     <div class="panel" id="selPanel">
       <div class="selHead">ВЫДЕЛЕНИЕ</div>
+      <!-- ИИ: заглушки под будущий зум камеры, по прямому запросу
+           пользователя — id заданы явно (zoomInBtn/zoomOutBtn), но
+           обработчиков клика/логики зума НЕТ, это намеренно не
+           реализовано здесь, функционал добавит пользователь сам. -->
+      <div class="selZoomRow">
+        <button type="button" class="selZoomBtn" id="zoomOutBtn" title="Отдалить">−</button>
+        <button type="button" class="selZoomBtn" id="zoomInBtn" title="Приблизить">+</button>
+      </div>
       <div id="selContent" style="color:var(--text-dim);">Ничего не выбрано</div>
       <!-- ИИ №4: кнопка запроса совета у ИИ-командующего. Стили инлайн,
            т.к. это единственная кнопка такого рода в HUD — заводить ради
@@ -1027,4 +1054,4 @@
 <script src="js/20-corner-spawn.js"></script>
 <script src="js/21-ai-base-strategy.js"></script>
 </body>
-                                                                    </html>
+</html>
