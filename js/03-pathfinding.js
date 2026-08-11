@@ -95,7 +95,19 @@ function buildOccupancyGrid(unitOwnerId) {
     }
   }
   Object.values(State.buildings).forEach(markBuilding);
-  if (State.remoteGhosts) {
+  // ИИ №45: БАГФИКС — remoteGhosts раньше блокировали путь ВСЕГДА, даже в
+  // режиме "ai" (не-PvP), где чужие здания в принципе не должны существовать
+  // физически для этого клиента (это либо утечка из общей комнаты, либо
+  // устаревшие данные от давно ушедшего игрока). В PvP материализованные
+  // здания оппонента уже находятся в State.buildings напрямую (см.
+  // 18-pvp-multiplayer.js, syncRemoteObjectsFromGhosts) — они и так попадают
+  // в occupancy через обычный Object.values(State.buildings) выше, поэтому
+  // повторно ходить по remoteGhosts здесь для pvp избыточно. Ограничиваем
+  // этот блок явно только тем случаем, когда он ещё мог быть нужен и не
+  // покрыт основным циклом — на практике сейчас не нужен вовсе, поэтому
+  // отключаем целиком вне зависимости от режима, чтобы призрачные тени
+  // из чужой/устаревшей комнаты никогда не резервировали клетки пути.
+  if (MultiplayerMode.mode === "pvp" && State.remoteGhosts) {
     Object.values(State.remoteGhosts).forEach(pdata => {
       if (pdata && pdata.buildings) Object.values(pdata.buildings).forEach(markBuilding);
     });
