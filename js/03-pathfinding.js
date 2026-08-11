@@ -8,11 +8,12 @@
 //  - PATH_GRID_SIZE — размер клетки сетки патфайндинга в мировых px.
 //    Сделан отдельным от tileSize отрисовки/fogTileSize по тем же
 //    причинам: сетку поиска пути дешевле держать грубее, чем визуальную.
-//  - buildOccupancyGrid() строит Set занятых клеток "col,row" из ВСЕХ
-//    зданий на карте (свои + вражеские + remote-тени других игроков) —
-//    юнит обходит любую постройку независимо от владельца, как в
-//    большинстве RTS (здания просто физическое препятствие).
-//  - findPath(startX, startY, goalX, goalY) — обычный A* с эвклидовой
+//  - buildOccupancyGrid(unitOwnerId) строит Set занятых клеток "col,row"
+//    из зданий на карте — КРОМЕ построек, чей ownerId совпадает с
+//    unitOwnerId (см. ИИ №39 ниже): юнит проходит сквозь свои постройки,
+//    но обходит чужие как физическое препятствие. Без unitOwnerId (или
+//    unitOwnerId == null) ведёт себя по-старому — все здания препятствие.
+//  - findPath(startX, startY, goalX, goalY, unitOwnerId) — обычный A* с эвклидовой
 //    эвристикой по 8-связной сетке (диагонали стоят дороже прямых шагов,
 //    срезание углов между двумя занятыми клетками запрещено).
 //    Если старт/цель попадают в занятую клетку (юнит уже внутри здания
@@ -47,9 +48,36 @@ function pathCellToWorldCenter(col, row) {
 // Пересчитывается на каждый вызов findPath — для прототипа с десятком
 // зданий это дёшево; если зданий станет много, стоит кэшировать и
 // инвалидировать только при постройке/разрушении.
-function buildOccupancyGrid() {
+//
+// ИИ №38: БАГФИКС "юниты (в первую очередь вражеский ИИ) проходят сквозь
+// вплотную построенные здания/стены игрока" (прямой репорт пользователя).
+// buildOccupancyGrid() теперь ПОПУТНО заполняет cellOwner: Map "col,row" ->
+// само здание, которому принадлежит эта клетка. Раньше occupied было
+// голым Set из координат без привязки к конкретному зданию — этого не
+// хватало floodFillCluster (см. её замену ниже, buildingCellsForGoal) для
+// корректной работы, когда несколько построек стоят вплотную друг к другу
+// (частый случай — периметр стен ИИ/игрока вокруг базы, см. 18-walls.js/
+// 19-ai-target-priority-and-clustering.js).
+// ИИ №39: БАГФИКС/ФИЧА по прямому запросу пользователя — "юниты должны
+// проходить через СВОИ постройки, но не через постройки врага, и зеркально
+// для вражеских юнитов". Раньше occupancy была общей для всех: любое
+// здание — препятствие для абсолютно любого юнита независимо от владельца
+// (см. старый комментарий выше, "здания просто физическое препятствие").
+// Теперь buildOccupancyGrid() принимает unitOwnerId и просто НЕ добавляет
+// в occupied клетки зданий, чьи ownerId совпадает с unitOwnerId — здания
+// самого юнита (и remote-тени того же владельца в pvp) в сетке
+// препятствий для него не участвуют вовсе, а не временно "открываются"
+// как раньше делалось только для startKey/goalKey. Чужие здания (и
+// remote-тени чужих владельцев) остаются занятыми клетками как прежде.
+//
+// unitOwnerId === undefined/null (например, вызов без юнита) сохраняет
+// старое поведение "все здания — препятствие" — на этот случай ничего не
+// опирается в текущем коде, но так безопаснее, чем молча исключить всё.
+function buildOccupancyGrid(unitOwnerId) {
   const occupied = new Set();
+  const cellOwner = new Map();
   function markBuilding(b) {
+    if (unitOwnerId != null && b.ownerId === unitOwnerId) return; // свои постройки — не препятствие
     const def = BuildingDefs[b.type];
     if (!def) return;
     const halfW = def.w * GameConfig.tileSize / 2;
@@ -59,7 +87,11 @@ function buildOccupancyGrid() {
     const minRow = Math.floor((b.y - halfH) / PATH_GRID_SIZE);
     const maxRow = Math.floor((b.y + halfH - 1) / PATH_GRID_SIZE);
     for (let c = minCol; c <= maxCol; c++) {
-      for (let r = minRow; r <= maxRow; r++) occupied.add(pathCellKey(c, r));
+      for (let r = minRow; r <= maxRow; r++) {
+        const key = pathCellKey(c, r);
+        occupied.add(key);
+        cellOwner.set(key, b);
+      }
     }
   }
   Object.values(State.buildings).forEach(markBuilding);
@@ -68,6 +100,7 @@ function buildOccupancyGrid() {
       if (pdata && pdata.buildings) Object.values(pdata.buildings).forEach(markBuilding);
     });
   }
+  occupied.cellOwner = cellOwner; // прицепляем к тому же объекту — вызывающему коду (findPath) не нужно менять сигнатуру/возвращать кортеж
   return occupied;
 }
 
@@ -75,25 +108,38 @@ function pathHeuristic(a, b) {
   return Math.hypot(a.col - b.col, a.row - b.row);
 }
 
-// Находит все занятые клетки, 4-связно смежные с startKey (обычный
-// случай — все клетки одного здания). Нужно, чтобы разрешить временный
-// проход через ВСЁ здание-цель, а не только через его центральную
-// клетку — иначе многоклеточные здания (2x2, 3x3 и крупнее) были бы
-// физически недостижимы для приказа "атаковать это здание".
-function floodFillCluster(occupied, startKey) {
-  const cluster = new Set([startKey]);
-  const queue = [startKey];
-  const DIRS = [[1,0],[-1,0],[0,1],[0,-1]];
-  while (queue.length > 0) {
-    const key = queue.pop();
-    const [c, r] = key.split(",").map(Number);
-    for (const [dc, dr] of DIRS) {
-      const nkey = pathCellKey(c + dc, r + dr);
-      if (occupied.has(nkey) && !cluster.has(nkey)) {
-        cluster.add(nkey);
-        queue.push(nkey);
-      }
-    }
+// ИИ №38: ЗАМЕНА floodFillCluster. Старая версия находила ВСЕ занятые
+// клетки, 4-связно смежные со startKey геометрическим флудфиллом по
+// occupancy-сетке — это ломалось, как только цель (например, штаб) стояла
+// вплотную к ДРУГИМ постройкам (стены периметра, впритык поставленные
+// здания: частый случай и у игрока, и у ИИ, см. 18-walls.js/enemyPlaceBuilding
+// clustering). Флудфилл не видит границ ОТДЕЛЬНОГО здания — он просто идёт
+// по любым смежным занятым клеткам, поэтому кластер "перетекал" через
+// стену на соседнее здание и дальше по всему периметру, временно объявляя
+// ВСЮ базу проходимой. A* в результате прокладывал путь ПРЯМО ЧЕРЕЗ
+// стены/постройки к цели внутри, вместо честного обхода снаружи — именно
+// это и проявлялось как "враг проходит сквозь здания".
+//
+// Правильная граница кластера — это конкретное ЗДАНИЕ, которому
+// принадлежит goalKey (его собственные w x h клеток из BuildingDefs), а
+// не что угодно, до чего можно дотянуться флудфиллом. buildOccupancyGrid()
+// выше уже даёт нам occupied.cellOwner (клетка -> здание) — просто берём
+// здание-владельца goalKey и пересчитываем ЕГО собственные клетки заново
+// (тот же halfW/halfH расчёт, что и markBuilding внутри buildOccupancyGrid).
+function buildingCellsForGoal(occupied, goalKey) {
+  const owner = occupied.cellOwner && occupied.cellOwner.get(goalKey);
+  if (!owner) return new Set([goalKey]); // подстраховка — не должно происходить, если goalKey реально occupied
+  const def = BuildingDefs[owner.type];
+  if (!def) return new Set([goalKey]);
+  const halfW = def.w * GameConfig.tileSize / 2;
+  const halfH = def.h * GameConfig.tileSize / 2;
+  const minCol = Math.floor((owner.x - halfW) / PATH_GRID_SIZE);
+  const maxCol = Math.floor((owner.x + halfW - 1) / PATH_GRID_SIZE);
+  const minRow = Math.floor((owner.y - halfH) / PATH_GRID_SIZE);
+  const maxRow = Math.floor((owner.y + halfH - 1) / PATH_GRID_SIZE);
+  const cluster = new Set();
+  for (let c = minCol; c <= maxCol; c++) {
+    for (let r = minRow; r <= maxRow; r++) cluster.add(pathCellKey(c, r));
   }
   return cluster;
 }
@@ -101,8 +147,8 @@ function floodFillCluster(occupied, startKey) {
 // A* по грубой сетке. Линейный поиск минимума в open-списке (вместо
 // бинарной кучи) — сетка карты прототипа маленькая, так что это остаётся
 // достаточно быстрым и заметно проще в поддержке.
-function findPath(startX, startY, goalX, goalY) {
-  const occupied = buildOccupancyGrid();
+function findPath(startX, startY, goalX, goalY, unitOwnerId) {
+  const occupied = buildOccupancyGrid(unitOwnerId);
   const start = worldToPathCell(startX, startY);
   const goal = worldToPathCell(goalX, goalY);
   const startKey = pathCellKey(start.col, start.row);
@@ -115,12 +161,13 @@ function findPath(startX, startY, goalX, goalY) {
   // цель — здание крупнее 1x1, разрешить только саму goalKey бесполезно —
   // клетки, соседствующие с ней внутри того же здания, всё ещё заняты,
   // и A* физически не может дойти ДО goalKey ни с одной стороны (она
-  // "заперта" внутри непроходимого блока). Решение: находим весь связный
-  // кластер занятых клеток, к которому принадлежит цель (обычно это ровно
-  // клетки одного здания), и временно считаем ВЕСЬ этот кластер проходимым
-  // — так путь доходит до ближайшей внешней грани здания и дальше прямиком
-  // до goalKey, не даёт обходных ложных тупиков.
-  const goalCluster = occupied.has(goalKey) ? floodFillCluster(occupied, goalKey) : null;
+  // "заперта" внутри непроходимого блока). Решение: находим клетки ИМЕННО
+  // того здания, которому принадлежит цель (buildingCellsForGoal, см. её
+  // комментарий выше — ИИ №38, замена старого геометрического
+  // floodFillCluster) и временно считаем ИХ проходимыми — так путь доходит
+  // до ближайшей внешней грани здания-цели и дальше прямиком до goalKey,
+  // не перетекая на соседние вплотную стоящие постройки/стены.
+  const goalCluster = occupied.has(goalKey) ? buildingCellsForGoal(occupied, goalKey) : null;
   const passable = (key) => !occupied.has(key) || key === startKey || key === goalKey || (goalCluster && goalCluster.has(key));
 
   const maxCol = GameConfig.mapTilesW * (GameConfig.tileSize / PATH_GRID_SIZE);
@@ -224,10 +271,85 @@ function setUnitDestination(u, goalX, goalY) {
   if (def && def.flying) {
     u.path = [{ x: goalX, y: goalY }];
   } else {
-    u.path = findPath(u.x, u.y, goalX, goalY);
+    u.path = findPath(u.x, u.y, goalX, goalY, u.ownerId);
   }
   const next = u.path[0];
   u.targetX = next.x;
   u.targetY = next.y;
 }
+
+/* ---------------------------- ИИ №38: статус / что дальше ----------------------------
+   Багфикс goalCluster (см. buildingCellsForGoal выше) ПРОВЕРЕН изолированным
+   Node-харнессом (не в браузере — окружения с реальным canvas/DOM в этой
+   сессии не было), воспроизводящим buildOccupancyGrid/findPath 1:1 из
+   реального кода: замкнутый периметр стен вокруг штаба заставлял старый
+   floodFillCluster считать ВСЮ базу (49 из 49 занятых клеток) единым
+   "кластером цели" — путь шёл прямо через стены. После фикса стены больше
+   НЕ входят в кластер чужой цели (кластер = ровно клетки одного здания).
+   Это и есть корневая причина репорта "враг проходит сквозь мои здания".
+
+   НЕ ДОДЕЛАНО следующим ИИ (см. PROMPT_FOR_NEXT_AI_SHORT.md/чат с
+   пользователем для полной постановки):
+   1) У этого же файла есть смежный краевой эффект, замеченный при
+      тестировании, но не исправленный: здание с нечётным числом тайлов
+      (напр. commandCenter 3x3 = 96px), стоящее НЕ на кратной PATH_GRID_SIZE
+      координате (типичный случай — стартовый штаб на x=300,y=300, кратности
+      32 нет), из-за (halfW-1)/(halfH-1) в maxCol/maxRow иногда занимает НА
+      ОДНУ клетку больше по краю, чем визуальные 3x3 тайла — не проверено,
+      влияет ли это на что-то практически важное (скорее всего нет, occupancy
+      чуть шире реального спрайта — это безопасная сторона ошибки), но стоит
+      перепроверить вместе с багфиксом целиком в реальном браузере.
+   2) Полная сцена "юнит должен обойти замкнутую базу и зайти в открытые
+      ворота с другой стороны" не была прогнана до конца в этой сессии
+      (тестовый харнесс test4_gate.js в /mnt зафиксирован вместе с этим
+      сообщением, но точку с "воротами сбоку, а юнит заходит по кругу"
+      нужно доперепроверить — последний прогон остановился на подходе
+      юнита к стене со стороны, где ворот нет, что ОЖИДАЕМО корректно, но
+      сама сцена с воротами сбоку от направления атаки нуждается в ещё
+      одном явном тесте, чтобы на 100% исключить регрессию в обходе).
+   3) ГЛАВНОЕ — это исправление НЕ проверялось вживую в браузере (нет
+      headless Chrome/Puppeteer в infra этой сессии, попытка npm install
+      puppeteer прошла, но браузерный бинарник не скачался/не был нужен для
+      Node-only теста). Крайне желательно открыть game.html вручную и
+      визуально прогнать бой врага против плотно застроенной базы (со
+      стенами и без), прежде чем считать баг закрытым на 100%.
+*/
+
+/* ---------------------------- ИИ №39: свои постройки — не препятствие ----------------------------
+   Прямой запрос пользователя: юниты должны проходить через СВОИ постройки
+   (не задерживаясь на обход), но не через постройки врага; вражеские
+   юниты — зеркально: сквозь свои, не сквозь игрока.
+
+   Реализовано в buildOccupancyGrid(unitOwnerId): при построении сетки
+   препятствий здания с b.ownerId === unitOwnerId просто не добавляются в
+   occupied/cellOwner — для юнита их как будто нет на карте патфайндинга.
+   findPath получил пятый параметр unitOwnerId и прокидывает его дальше;
+   setUnitDestination передаёт u.ownerId автоматически, так что все
+   существующие вызовы (движение, attack-move, возврат домой, вражеский ИИ
+   через updateEnemyStub/06-enemy-ai.js) получили новое поведение бесплатно
+   — их сигнатуры менять не пришлось, они и раньше вызывали
+   setUnitDestination(u, x, y), где u уже содержит ownerId.
+
+   Что это НЕ меняет:
+   - isBuildPlacementValid/isEnemyBuildPlacementValid (18-walls.js и
+     06-enemy-ai.js) — проверка "можно ли ЗДЕСЬ построить здание" — не
+     трогалась, она не использует buildOccupancyGrid и по-прежнему не
+     позволяет ставить новое здание поверх любого другого (своего или
+     чужого). Меняется только проходимость для ДВИЖЕНИЯ юнитов, не
+     правила застройки.
+   - Прямое физическое перекрытие спрайтов: юнит теперь может визуально
+     оказаться "внутри" контура своего здания, пока идёт напрямую сквозь
+     него — это и есть требуемое поведение ("проходят через"), не баг.
+   - Вражеские remote-тени (State.remoteGhosts, pvp) обрабатываются той же
+     веткой markBuilding, так что в pvp-режиме свои/чужие тени тоже
+     корректно совпадают/не совпадают с unitOwnerId юнита, который считает
+     путь.
+
+   Проверено логически по коду (та же оговорка, что и у ИИ №38 в блоке
+   выше — нет браузерного окружения в этой сессии для визуальной проверки
+   вживую): стоит открыть game.html и проверить на практике — 1) юнит
+   игрока идёт по прямой через собственное здание, 2) тот же юнит
+   ОБХОДИТ вражеское здание/стену, 3) вражеский ИИ-юнит проходит сквозь
+   свои постройки, но обходит постройки/стены игрока.
+*/
 
