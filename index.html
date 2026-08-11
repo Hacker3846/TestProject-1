@@ -433,7 +433,15 @@
     position:absolute;
     right:calc(10px + var(--safe-right));
     bottom:calc(10px + var(--safe-bottom));
-    z-index:6;
+    /* ИИ (фикс): было z-index:6 — ниже, чем у #selPanel.open (z-index:20).
+       Когда панель "ВЫДЕЛЕНИЕ" открыта на телефоне, она ложится ровно на
+       эту же зону экрана и перехватывала тап, так что повторный клик по
+       ☰ не долетал до самой кнопки и панель невозможно было закрыть тем
+       же способом, каким открыли. #mobileActionBar сам по себе
+       pointer-events:none (кликабельны только круглые кнопки внутри),
+       поэтому поднятие z-index выше панели возвращает кнопкам
+       доступность НАД ней, не перекрывая остальную часть #selPanel. */
+    z-index:21;
     gap:8px;
     pointer-events:none;
   }
@@ -1019,4 +1027,4 @@
 <script src="js/20-corner-spawn.js"></script>
 <script src="js/21-ai-base-strategy.js"></script>
 </body>
-</html>
+                                                                    </html>
