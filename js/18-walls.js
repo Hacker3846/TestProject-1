@@ -651,7 +651,7 @@ viewport.addEventListener("mousedown", (e) => {
   if (!State.buildMode || State.buildMode.type !== "wall") return;
   if (e.button !== 0) return;
   const rect = viewport.getBoundingClientRect();
-  const world = snapWallPointToGrid(screenToWorld(e.clientX - rect.left, e.clientY - rect.top));
+  const world = snapWallPointToGrid(screenToWorldZoomed(e.clientX - rect.left, e.clientY - rect.top));
   buildSingleWall(world) || logMsg("Стена не построена — проверьте кредиты/место", "warn");
   e.stopImmediatePropagation();
   e.preventDefault();
@@ -694,7 +694,7 @@ viewport.addEventListener("mousedown", (e) => {
       // не мешает.
       const rect = rectOf();
       const touch = e.touches[0];
-      firstTouchWorld = snapWallPointToGrid(screenToWorld(touch.clientX - rect.left, touch.clientY - rect.top));
+      firstTouchWorld = snapWallPointToGrid(screenToWorldZoomed(touch.clientX - rect.left, touch.clientY - rect.top));
       firstTouchId = touch.identifier;
       twoFingerHandled = false;
       e.preventDefault();
@@ -719,11 +719,11 @@ viewport.addEventListener("mousedown", (e) => {
           if (e.touches[i].identifier !== firstTouchId) { secondTouch = e.touches[i]; break; }
         }
         if (!secondTouch) secondTouch = e.touches[1]; // подстраховка, не должно случаться
-        p2World = snapWallPointToGrid(screenToWorld(secondTouch.clientX - rect.left, secondTouch.clientY - rect.top));
+        p2World = snapWallPointToGrid(screenToWorldZoomed(secondTouch.clientX - rect.left, secondTouch.clientY - rect.top));
       } else {
         const t0 = e.touches[0], t1 = e.touches[1];
-        p1World = snapWallPointToGrid(screenToWorld(t0.clientX - rect.left, t0.clientY - rect.top));
-        p2World = snapWallPointToGrid(screenToWorld(t1.clientX - rect.left, t1.clientY - rect.top));
+        p1World = snapWallPointToGrid(screenToWorldZoomed(t0.clientX - rect.left, t0.clientY - rect.top));
+        p2World = snapWallPointToGrid(screenToWorldZoomed(t1.clientX - rect.left, t1.clientY - rect.top));
       }
 
       const rawPoints = computeWallChainPoints(p1World.x, p1World.y, p2World.x, p2World.y);
