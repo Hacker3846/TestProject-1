@@ -59,14 +59,42 @@ function iconGlyphFor(type) {
 (function patchSelectionPanel() {
   if (typeof renderSelectionPanel !== "function") return;
 
+  // ИИ (фикс "список выделения дёргается"): renderSelectionPanel зовётся
+  // очень часто — на каждое изменение HP выделенных юнитов/зданий, то есть
+  // практически непрерывно во время боя, а не только при смене выделения.
+  // Старая версия на КАЖДЫЙ такой вызов делала el.innerHTML = "" и
+  // пересоздавала ВСЕ строки с нуля. У .selUnit в CSS висит анимация
+  // появления (rowIn: fade + сдвиг) — раз DOM-узлы реально уничтожались и
+  // создавались заново на каждый вызов, эта анимация запуска перезапускалась
+  // у ВСЕХ строк разом при каждом тике боя, что и читалось как "дёргается".
+  //
+  // Теперь строка для одного и того же юнита/типа/здания — это ОДИН и тот
+  // же DOM-узел между вызовами (ключ: тип для сгруппированных юнитов, id
+  // для зданий, id+индекс для очереди построек). У уже существующей строки
+  // просто обновляется innerHTML содержимого — сам узел не пересоздаётся,
+  // поэтому CSS-анимация на нём не перезапускается и HP/прогресс просто
+  // меняются на месте. Анимация появления по-прежнему играет — но только у
+  // строк, которых не было в предыдущем кадре (юнит реально ДОБАВИЛСЯ в
+  // выделение) — это и есть её корректное применение.
   renderSelectionPanel = function () {
     const el = document.getElementById("selContent");
     if (!el) return;
+
+    // Один раз сносим статичную разметку из исходного HTML/предыдущей
+    // немодульной версии — дальше #selContent целиком под управлением
+    // реестра el._rows и никогда больше не очищается через innerHTML="".
+    if (!el._rows) { el._rows = new Map(); el.innerHTML = ""; }
+    const rows = el._rows;
+
     if (State.selection.size === 0) {
-      el.innerHTML = `<div class="selEmpty">Ничего не выбрано<br><span>ЛКМ + рамка — выделить отряд</span></div>`;
+      if (!el.dataset.empty) {
+        el.innerHTML = `<div class="selEmpty">Ничего не выбрано<br><span>ЛКМ + рамка — выделить отряд</span></div>`;
+        el.dataset.empty = "1";
+        rows.clear();
+      }
       return;
     }
-    el.innerHTML = "";
+    if (el.dataset.empty) { el.innerHTML = ""; el.dataset.empty = ""; rows.clear(); }
 
     // Разделяем на "группируемые" (обычные боевые/рабочие юниты без
     // buildQueue — их можно свернуть в одну строку "5x Пехотинец") и
@@ -86,60 +114,91 @@ function iconGlyphFor(type) {
       groups[u.type].maxHpSum += u.maxHp;
     });
 
+    const totalUnitCount = Object.values(groups).reduce((s, g) => s + g.count, 0);
+
+    // Возвращает DOM-узел для ключа — переиспользует существующий (только
+    // обновляя его содержимое) либо создаёт новый (тогда и только тогда
+    // играет entrance-анимация из CSS).
+    const seen = new Set();
+    function upsert(key, className, html) {
+      seen.add(key);
+      let node = rows.get(key);
+      if (!node) {
+        node = document.createElement("div");
+        node.className = className;
+        rows.set(key, node);
+      }
+      node.innerHTML = html;
+      return node;
+    }
+
+    const order = [];
+
     // Сводная строка отряда, если выделено больше одного юнита —
     // отвечает на первый же взгляд вопрос "что у меня вообще выделено и
     // насколько оно живое", не считая построчно.
-    const totalUnitCount = Object.values(groups).reduce((s, g) => s + g.count, 0);
     if (totalUnitCount > 1) {
-      const summary = document.createElement("div");
-      summary.className = "selSummary";
-      summary.textContent = `Отряд: ${totalUnitCount} ед.`;
-      el.appendChild(summary);
+      order.push("summary");
+      upsert("summary", "selSummary", `Отряд: ${totalUnitCount} ед.`);
     }
 
     Object.entries(groups).forEach(([type, g]) => {
+      const key = "g:" + type;
+      order.push(key);
       const frac = g.maxHpSum > 0 ? g.hpSum / g.maxHpSum : 1;
-      const row = document.createElement("div");
-      row.className = "selUnit selUnitGrouped";
-      row.innerHTML = `
+      upsert(key, "selUnit selUnitGrouped", `
         <div class="selUnitTop">
           <span class="selIcon">${iconGlyphFor(type)}</span>
           <span class="selName">${g.count > 1 ? `${g.count}× ` : ""}${g.def ? g.def.label : type}</span>
           <span class="selHpText">${Math.floor(g.hpSum)}/${g.maxHpSum} HP</span>
         </div>
-        <div class="hpbar"><div class="hpfill" style="width:${frac*100}%;background:${hpFractionColor(frac)};"></div></div>`;
-      el.appendChild(row);
+        <div class="hpbar"><div class="hpfill" style="width:${frac*100}%;background:${hpFractionColor(frac)};"></div></div>`);
     });
 
     buildingIds.forEach(id => {
       const b = State.buildings[id];
       const def = BuildingDefs[b.type];
       const frac = b.maxHp > 0 ? Math.max(0, b.hp) / b.maxHp : 1;
-      const row = document.createElement("div");
-      row.className = "selUnit selBuilding";
-      row.innerHTML = `
+      const key = "b:" + id;
+      order.push(key);
+      upsert(key, "selUnit selBuilding", `
         <div class="selUnitTop">
           <span class="selIcon">${iconGlyphFor(b.type)}</span>
           <span class="selName">${def ? def.label : b.type}</span>
           <span class="selHpText">${Math.floor(b.hp)}/${b.maxHp} HP</span>
         </div>
-        <div class="hpbar"><div class="hpfill" style="width:${frac*100}%;background:${hpFractionColor(frac)};"></div></div>`;
-      el.appendChild(row);
+        <div class="hpbar"><div class="hpfill" style="width:${frac*100}%;background:${hpFractionColor(frac)};"></div></div>`);
 
       if (b.buildQueue && b.buildQueue.length) {
-        b.buildQueue.forEach((order, idx) => {
-          const odef = UnitDefs[order.unitType];
-          const pct = Math.max(0, Math.min(1, 1 - order.msLeft / order.totalMs));
-          const qrow = document.createElement("div");
-          qrow.className = "selQueueRow";
-          qrow.innerHTML = `<div class="selQueueTop">
+        b.buildQueue.forEach((order2, idx) => {
+          const odef = UnitDefs[order2.unitType];
+          const pct = Math.max(0, Math.min(1, 1 - order2.msLeft / order2.totalMs));
+          const qkey = `q:${id}:${idx}`;
+          order.push(qkey);
+          upsert(qkey, "selQueueRow", `<div class="selQueueTop">
               <span>${idx === 0 ? "Строится" : "В очереди"}: ${odef.label}</span>
-              <span>${idx === 0 ? Math.ceil(order.msLeft/1000) + "с" : ""}</span>
+              <span>${idx === 0 ? Math.ceil(order2.msLeft/1000) + "с" : ""}</span>
             </div>
-            <div class="hpbar"><div class="hpfill" style="width:${idx === 0 ? pct*100 : 0}%;background:var(--accent-gdi);"></div></div>`;
-          el.appendChild(qrow);
+            <div class="hpbar"><div class="hpfill" style="width:${idx === 0 ? pct*100 : 0}%;background:var(--accent-gdi);"></div></div>`);
         });
       }
     });
+
+    // Расставляем строки в нужном порядке. insertBefore с уже верной
+    // позицией — no-op для браузера, так что переиспользованные строки,
+    // чей порядок не изменился, вообще не трогаются физически в DOM.
+    let prev = null;
+    order.forEach(key => {
+      const node = rows.get(key);
+      const wantedNext = prev ? prev.nextSibling : el.firstChild;
+      if (wantedNext !== node) el.insertBefore(node, wantedNext);
+      prev = node;
+    });
+
+    // Убираем строки тех юнитов/зданий/очередей, которых больше нет в
+    // текущем выделении (умерли, деселектнуты, очередь продвинулась).
+    for (const [key, node] of rows) {
+      if (!seen.has(key)) { node.remove(); rows.delete(key); }
+    }
   };
 })();
