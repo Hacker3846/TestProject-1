@@ -593,4 +593,4 @@ function updatePowerAndUnitCounts() {
     p.powerDeficit = isDeficit;
     p.power = power; p.powerUse = use;
   });
-    }
+}
