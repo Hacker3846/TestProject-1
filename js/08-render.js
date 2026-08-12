@@ -23,6 +23,29 @@ const FX = {
 
 function nowT() { return performance.now(); }
 
+// ОПТИМИЗАЦИЯ (перф): большинство линейных градиентов в drawUnit/drawBuilding
+// рисуются в ЛОКАЛЬНЫХ координатах (после ctx.translate/ctx.rotate) и их
+// геометрия (x0,y0,x1,y1) полностью определяется размером юнита/здания —
+// то есть одинакова для всех объектов одного типа. Раньше на каждый юнит
+// каждый кадр создавался НОВЫЙ объект CanvasGradient (ctx.createLinearGradient
+// + 2х addColorStop) — на телефоне при паре десятков юнитов в кадре это
+// десятки лишних аллокаций 60 раз в секунду, одна из главных причин нагрева.
+// cachedLinearGradient() держит один CanvasGradient на уникальную комбинацию
+// координат+цветов и переиспользует его во всех последующих кадрах — сам
+// градиент как визуальный объект от этого не меняется ни на пиксель.
+const _gradientCache = new Map();
+function cachedLinearGradient(x0, y0, x1, y1, colorA, colorB, key) {
+  const cacheKey = key || (x0 + "," + y0 + "," + x1 + "," + y1 + "|" + colorA + "|" + colorB);
+  let g = _gradientCache.get(cacheKey);
+  if (!g) {
+    g = ctx.createLinearGradient(x0, y0, x1, y1);
+    g.addColorStop(0, colorA);
+    g.addColorStop(1, colorB);
+    _gradientCache.set(cacheKey, g);
+  }
+  return g;
+}
+
 // Возвращает (и лениво создаёт) приватный визуальный стейт объекта.
 function visState(obj) {
   if (!obj.__vis) {
@@ -1350,9 +1373,7 @@ function drawTank(u, udef, baseColor, vis, t) {
   ctx.fillRect(-bodyW / 2, bodyH / 2 - 1, bodyW, 4);
 
   // корпус
-  const grad = ctx.createLinearGradient(0, -bodyH / 2, 0, bodyH / 2);
-  grad.addColorStop(0, lighten(baseColor, 15));
-  grad.addColorStop(1, darken(baseColor, 25));
+  const grad = cachedLinearGradient(0, -bodyH / 2, 0, bodyH / 2, lighten(baseColor, 15), darken(baseColor, 25), "tank|" + baseColor + "|" + bodyH);
   ctx.fillStyle = grad;
   roundRectLocal(-bodyW / 2, -bodyH / 2, bodyW, bodyH, 3);
   ctx.fill();
@@ -1479,9 +1500,7 @@ function drawApc(u, udef, baseColor, vis, t) {
 
   // корпус — скошенный нос (клинообразный многоугольник, не прямоугольник
   // как у tank), придаёт "покатую лобовую броню" классического БТР.
-  const grad = ctx.createLinearGradient(0, -bodyH / 2, 0, bodyH / 2);
-  grad.addColorStop(0, lighten(baseColor, 16));
-  grad.addColorStop(1, darken(baseColor, 22));
+  const grad = cachedLinearGradient(0, -bodyH / 2, 0, bodyH / 2, lighten(baseColor, 16), darken(baseColor, 22), "apc|" + baseColor + "|" + bodyH);
   ctx.fillStyle = grad;
   ctx.beginPath();
   ctx.moveTo(bodyW / 2, 0);
@@ -1556,9 +1575,7 @@ function drawAircraft(u, udef, baseColor, vis, t) {
   ctx.moveTo(3, 2); ctx.lineTo(13, 8); ctx.lineTo(3, 6); ctx.closePath(); ctx.fill();
 
   // фюзеляж
-  const grad = ctx.createLinearGradient(0, -10, 0, 8);
-  grad.addColorStop(0, lighten(baseColor, 20));
-  grad.addColorStop(1, darken(baseColor, 15));
+  const grad = cachedLinearGradient(0, -10, 0, 8, lighten(baseColor, 20), darken(baseColor, 15), "aircraft|" + baseColor);
   ctx.fillStyle = grad;
   ctx.beginPath();
   ctx.moveTo(0, -10);
@@ -1629,10 +1646,15 @@ function drawGunship(u, udef, baseColor, vis, t) {
 
   // корпус — вытянутая приземистая капсула (не треугольный фюзеляж, как
   // у aircraft), кабина спереди шире, к хвосту сужается
-  const grad = ctx.createLinearGradient(-9, 0, 9, 0);
-  grad.addColorStop(0, darken(baseColor, 12));
-  grad.addColorStop(0.5, lighten(baseColor, 16));
-  grad.addColorStop(1, darken(baseColor, 8));
+  const gunshipGradKey = "gunship|" + baseColor;
+  let grad = _gradientCache.get(gunshipGradKey);
+  if (!grad) {
+    grad = ctx.createLinearGradient(-9, 0, 9, 0);
+    grad.addColorStop(0, darken(baseColor, 12));
+    grad.addColorStop(0.5, lighten(baseColor, 16));
+    grad.addColorStop(1, darken(baseColor, 8));
+    _gradientCache.set(gunshipGradKey, grad);
+  }
   ctx.fillStyle = grad;
   ctx.beginPath();
   ctx.moveTo(11, 0);
@@ -1729,9 +1751,7 @@ function drawArtillery(u, udef, baseColor, vis, t) {
   ctx.strokeStyle = "rgba(0,0,0,0.55)"; ctx.lineWidth = 1; ctx.strokeRect(-bodyW * 0.35, -bodyH * 0.42, bodyW * 0.7, bodyH * 0.84);
 
   // кабина/рубка водителя спереди — маленькая, приземистая
-  const grad = ctx.createLinearGradient(0, -bodyH / 2, 0, bodyH / 2);
-  grad.addColorStop(0, lighten(baseColor, 14));
-  grad.addColorStop(1, darken(baseColor, 22));
+  const grad = cachedLinearGradient(0, -bodyH / 2, 0, bodyH / 2, lighten(baseColor, 14), darken(baseColor, 22), "artillery|" + baseColor + "|" + bodyH);
   ctx.fillStyle = grad;
   roundRectLocal(bodyW * 0.12, -bodyH * 0.38, bodyW * 0.36, bodyH * 0.76, 2);
   ctx.fill();
@@ -1997,6 +2017,9 @@ function drawHitSparks(t) {
     const dur = 220;
     if (age > dur) { FX.hitSparks.splice(i, 1); continue; }
     const s = worldToScreen(sp.x, sp.y);
+    // ОПТИМИЗАЦИЯ (перф): viewport culling — искры вне экрана раньше всё
+    // равно проходили полную отрисовку (save/rotate x5 на каждую).
+    if (s.x < -20 || s.y < -20 || s.x > visibleWorldWidth() + 20 || s.y > visibleWorldHeight() + 20) continue;
     const p = age / dur;
     ctx.save();
     ctx.translate(s.x, s.y);
@@ -2067,6 +2090,11 @@ function drawProjectiles(t) {
     const p = age / pr.dur;
     const cx = pr.x0 + (pr.x1 - pr.x0) * p, cy = pr.y0 + (pr.y1 - pr.y0) * p;
     const s = worldToScreen(cx, cy);
+    // ОПТИМИЗАЦИЯ (перф): viewport culling — снаряды за пределами видимой
+    // области раньше всё равно проходили полную отрисовку (save/rotate/
+    // gradient/stroke). В крупных боях с десятками одновременных выстрелов
+    // за кадром большая часть карты (и её снаряды) обычно вне экрана.
+    if (s.x < -30 || s.y < -30 || s.x > visibleWorldWidth() + 30 || s.y > visibleWorldHeight() + 30) continue;
     const s0 = worldToScreen(pr.x0, pr.y0);
     const ang = Math.atan2(pr.y1 - pr.y0, pr.x1 - pr.x0);
 
@@ -2075,9 +2103,11 @@ function drawProjectiles(t) {
       const tailLen = Math.min(14, dist(s0.x, s0.y, s.x, s.y));
       ctx.save();
       ctx.translate(s.x, s.y); ctx.rotate(ang);
-      const grad = ctx.createLinearGradient(-tailLen, 0, 0, 0);
-      grad.addColorStop(0, "rgba(255,235,180,0)");
-      grad.addColorStop(1, "rgba(255,245,200,0.95)");
+      // тот же градиент переиспользуется для всех пуль — геометрия и цвета
+      // трассера константны (0..-tailLen, tailLen почти всегда == 14, кап
+      // из Math.min выше), кэш по округлённой длине хвоста избегает
+      // пересоздания CanvasGradient на каждую пулю каждый кадр.
+      const grad = cachedLinearGradient(-Math.round(tailLen), 0, 0, 0, "rgba(255,235,180,0)", "rgba(255,245,200,0.95)", "bullet|" + Math.round(tailLen));
       ctx.strokeStyle = grad;
       ctx.lineWidth = 1.2;
       ctx.beginPath(); ctx.moveTo(-tailLen, 0); ctx.lineTo(0, 0); ctx.stroke();
@@ -2120,6 +2150,10 @@ function drawImpacts(t) {
     const dur = big ? 320 : 140;
     if (age > dur) { FX.impacts.splice(i, 1); continue; }
     const s = worldToScreen(im.x, im.y);
+    // ОПТИМИЗАЦИЯ (перф): viewport culling — взрывы вне экрана раньше всё
+    // равно создавали radial gradient и рисовались (в крупных боях с
+    // десятками одновременных попаданий за пределами вида это заметно).
+    if (s.x < -30 || s.y < -30 || s.x > visibleWorldWidth() + 30 || s.y > visibleWorldHeight() + 30) continue;
     const p = age / dur;
     const maxR = big ? 20 : 8;
 
@@ -2170,6 +2204,8 @@ function drawDeathEffects(t) {
     const dur = d.kind === "building" ? 520 : (isVehicle ? 620 : 340);
     if (age > dur) { FX.deaths.splice(i, 1); continue; }
     const s = worldToScreen(d.x, d.y);
+    // ОПТИМИЗАЦИЯ (перф): viewport culling — эффекты смерти вне экрана.
+    if (s.x < -30 || s.y < -30 || s.x > visibleWorldWidth() + 30 || s.y > visibleWorldHeight() + 30) continue;
     const p = age / dur;
     ctx.save();
     ctx.globalAlpha = 1 - p;
@@ -2238,9 +2274,25 @@ function hexToRgb(hex) {
     : [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16));
   return { r: n[0], g: n[1], b: n[2] };
 }
+// ОПТИМИЗАЦИЯ (перф): lighten/darken вызываются на КАЖДЫЙ юнит/здание
+// КАЖДЫЙ кадр (например drawTank делает lighten(baseColor,15) +
+// darken(baseColor,25) каждый вызов) — раньше это означало парсинг hex ->
+// RGB и сборку новой строки "rgb(...)" по многу раз в секунду на объект,
+// хотя baseColor (цвет игрока) практически никогда не меняется между
+// кадрами. Результат теперь кэшируется по ключу "hex|amt" — тот же
+// видимый эффект, ноль лишних аллокаций/парсинга на повторных вызовах с
+// теми же аргументами. Кэш маленький (число цветов игроков * диапазон amt),
+// не растёт бесконтрольно.
+const _lightenCache = new Map();
 function lighten(hex, amt) {
-  const { r, g, b } = hexToRgb(hex);
-  return `rgb(${clamp(r + amt, 0, 255)},${clamp(g + amt, 0, 255)},${clamp(b + amt, 0, 255)})`;
+  const key = hex + "|" + amt;
+  let v = _lightenCache.get(key);
+  if (v === undefined) {
+    const { r, g, b } = hexToRgb(hex);
+    v = `rgb(${clamp(r + amt, 0, 255)},${clamp(g + amt, 0, 255)},${clamp(b + amt, 0, 255)})`;
+    _lightenCache.set(key, v);
+  }
+  return v;
 }
 function darken(hex, amt) { return lighten(hex, -amt); }
 
@@ -2289,6 +2341,21 @@ function darken(hex, amt) { return lighten(hex, -amt); }
   };
 })();
 
+// ОПТИМИЗАЦИЯ (перф, главная причина нагрева телефона): раньше render()
+// вызывался БЕЗ ограничения на каждый requestAnimationFrame — на
+// современных телефонах/мониторах это часто 90-120 кадров в секунду, хотя
+// логика игры (gameTick) тикает всего 10 раз/сек и глазу больше 45-50
+// кадров в секунду в RTS-камере ничего не даёт. Каждый лишний кадр — это
+// полный проход по всем юнитам/зданиям/эффектам с десятками save/restore,
+// заливок и градиентов (см. drawUnit/drawBuilding) — на мобильном GPU
+// именно это удвоение-утроение частоты рендера почти без выигрыша в
+// плавности и было основным источником нагрева/расхода батареи.
+// RENDER_MIN_FRAME_MS ограничивает render() до ~45 fps (22мс) — игровая
+// ЛОГИКА (gameTick, урон, экономика, ИИ) продолжает тикать с тем же
+// GameConfig.tickRateMs, как и раньше, то есть на геймплей это не влияет
+// вообще, меняется только то, как часто перерисовывается картинка.
+const RENDER_MIN_FRAME_MS = 1000 / 45;
+
 function loop(timestamp) {
   if (!loop.last) loop.last = timestamp;
   const dt = timestamp - loop.last;
@@ -2300,6 +2367,13 @@ function loop(timestamp) {
     loop.acc -= GameConfig.tickRateMs;
   }
 
-  render();
+  loop.renderAcc = (loop.renderAcc || 0) + dt;
+  if (loop.renderAcc >= RENDER_MIN_FRAME_MS) {
+    // не накапливаем "долг" по кадрам при коротких фризах (смена вкладки,
+    // GC-пауза) — иначе после лага рендер попытался бы отрисовать
+    // несколько кадров подряд, чтобы "нагнать" время
+    loop.renderAcc = 0;
+    render();
+  }
   requestAnimationFrame(loop);
 }

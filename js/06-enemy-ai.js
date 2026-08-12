@@ -257,8 +257,34 @@ function ENEMY_REFINERY_TARGET() {
   return currentEnemyDifficulty().workerTarget + (enemyComposition().workerTargetBonus || 0);
 }
 
-function enemyUnits() { return Object.values(State.units).filter(u => u.ownerId === enemyPlayerId && u.hp > 0); }
-function enemyBuildings() { return Object.values(State.buildings).filter(b => b.ownerId === enemyPlayerId && b.hp > 0); }
+// ОПТИМИЗАЦИЯ (перф): enemyUnits()/enemyBuildings() раньше пересобирали
+// Object.values(...).filter(...) с нуля НА КАЖДЫЙ вызов — а внутри одного
+// decision-тика ИИ (enemyEconomyStep/enemyBuildupStep/enemyAttackStep и
+// т.д., см. updateEnemyStub) они вызываются подряд по 5-8 раз на разные
+// нужды. Результат теперь кэшируется на время одного gameTick (инвалидация
+// по State.tick, см. 07-game-loop-combat.js) — если счётчик тика не
+// изменился с прошлого вызова, отдаём тот же массив без пересчёта. Список
+// живых юнитов/зданий не может измениться в середине одного тика (State
+// мутируется только внутри gameTick), поэтому это безопасно и не меняет
+// поведение ИИ ни на йоту — только не пересчитывает одно и то же по кругу.
+let _enemyUnitsCacheTick = -1, _enemyUnitsCache = null;
+function enemyUnits() {
+  const tick = (typeof State !== "undefined" && State.tick) || 0;
+  if (_enemyUnitsCacheTick !== tick) {
+    _enemyUnitsCache = Object.values(State.units).filter(u => u.ownerId === enemyPlayerId && u.hp > 0);
+    _enemyUnitsCacheTick = tick;
+  }
+  return _enemyUnitsCache;
+}
+let _enemyBuildingsCacheTick = -1, _enemyBuildingsCache = null;
+function enemyBuildings() {
+  const tick = (typeof State !== "undefined" && State.tick) || 0;
+  if (_enemyBuildingsCacheTick !== tick) {
+    _enemyBuildingsCache = Object.values(State.buildings).filter(b => b.ownerId === enemyPlayerId && b.hp > 0);
+    _enemyBuildingsCacheTick = tick;
+  }
+  return _enemyBuildingsCache;
+}
 function enemyHq() { return enemyBuildings().find(b => b.type === "commandCenter") || null; }
 
 // ИИ №25: "дожимать/отступать/копить" по факту раздела 2 (запрос

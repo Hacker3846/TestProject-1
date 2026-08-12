@@ -54,6 +54,26 @@
 // отдельных плиток. Диагональные соседи учитываются отдельной насечкой в
 // углу (протяжка ИИ №32 умеет строить по диагонали — угловой стык должен
 // тоже визуально "схватываться", не только ортогональный).
+// ОПТИМИЗАЦИЯ (перф): wallNeighborsWorld/wallGapFillsWorld раньше делали
+// Object.values(State.buildings) — полный проход по ВСЕМ зданиям — на
+// КАЖДУЮ отрисовываемую стену КАЖДЫЙ кадр (вызываются из patchWallRenderShape
+// ниже, который патчит drawBuildingShape и срабатывает один раз на стену
+// за кадр рендера). При периметре из пары десятков стен это давало
+// O(стены × все_здания) 45-60 раз в секунду. Список стен не может
+// измениться в середине одного кадра рендера (State мутируется только
+// внутри gameTick, не внутри render()), поэтому отфильтрованный список
+// достаточно один раз пересчитать за игровой тик и переиспользовать для
+// всех стен этого кадра — видимый результат идентичен, меняется только
+// то, сколько раз мы проходим по State.buildings.
+let _wallListCacheTick = -1, _wallListCache = null;
+function _cachedWallList() {
+  const tick = (typeof State !== "undefined" && State.tick) || 0;
+  if (_wallListCacheTick !== tick || _wallListCache === null) {
+    _wallListCache = Object.values(State.buildings).filter(b => b.type === "wall");
+    _wallListCacheTick = tick;
+  }
+  return _wallListCache;
+}
 function wallNeighborsWorld(wx, wy) {
   const step = (typeof wallChainStepLength === "function") ? wallChainStepLength()
     : BuildingDefs.wall.w * GameConfig.tileSize;
@@ -63,9 +83,8 @@ function wallNeighborsWorld(wx, wy) {
     { dx: 1, dy: 1 }, { dx: -1, dy: -1 }, { dx: 1, dy: -1 }, { dx: -1, dy: 1 },
   ];
   const found = { N: false, S: false, E: false, W: false, NE: false, NW: false, SE: false, SW: false };
-  const buildings = Object.values(State.buildings);
+  const buildings = _cachedWallList();
   for (const b of buildings) {
-    if (b.type !== "wall") continue;
     const ddx = b.x - wx, ddy = b.y - wy;
     const dist = Math.hypot(ddx, ddy);
     if (dist < step * 0.5 || dist > step * 1.5) continue; // сама стена или слишком далеко
@@ -111,9 +130,8 @@ function wallGapFillsWorld(wx, wy) {
   const w = def.w * GameConfig.tileSize, h = def.h * GameConfig.tileSize;
   const fills = []; // {dx, dy, gap} — dx/dy: направление к соседу (1/-1/0), gap: точный зазор край-в-край, px
 
-  const buildings = Object.values(State.buildings);
+  const buildings = _cachedWallList();
   for (const b of buildings) {
-    if (b.type !== "wall") continue;
     const ddx = b.x - wx, ddy = b.y - wy;
     const adx = Math.abs(ddx), ady = Math.abs(ddy);
 
@@ -472,10 +490,9 @@ function nearestWallAnchor(worldPoint) {
   // синхронизации сеток, но нарушало бы смысл функции — "приклеиться к
   // ближайшей существующей стене").
   const searchRadius = step * Math.SQRT2 * 1.1;
-  const buildings = Object.values(State.buildings);
+  const buildings = _cachedWallList();
   let best = null, bestDist = Infinity;
   for (const b of buildings) {
-    if (b.type !== "wall") continue;
     const dist = Math.hypot(b.x - worldPoint.x, b.y - worldPoint.y);
     if (dist < searchRadius && dist < bestDist) { best = b; bestDist = dist; }
   }

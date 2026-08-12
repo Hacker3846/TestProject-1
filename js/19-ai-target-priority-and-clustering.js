@@ -58,34 +58,21 @@
 // радиусе, даже если появится другой атакующий чуть ближе. Патч ниже влияет
 // только на МОМЕНТ выбора НОВОЙ цели, не на переключение уже выбранной —
 // специально ничего менять здесь не нужно, инвариант обеспечивает 07-й файл.
-function attackerCandidateIds(selfId) {
-  const ids = new Set();
-  Object.values(State.units).forEach(u => {
-    if (u.hp > 0 && u.attackTargetId === selfId) ids.add(u.id);
-  });
-  Object.values(State.buildings).forEach(b => {
-    if (b.hp > 0 && b.attackTargetId === selfId) ids.add(b.id);
-  });
-  return ids;
-}
-
+// ОПТИМИЗАЦИЯ (перф): раньше этот патч делал ДВА отдельных полных прохода
+// по State.units/State.buildings на каждый вызов findNearestEnemyInRange —
+// сначала attackerCandidateIds() строил Set атакующих (проход №1), потом
+// (если Set непустой) шёл ещё один проход consider() по всем юнитам+
+// зданиям (проход №2). Раньше это было прокомментировано как "не дублируем
+// O(n) дважды", но на деле дублировало: attackerCandidateIds сам по себе
+// уже полный проход, вызывался БЕЗ УСЛОВИЙ на каждый вызов функции, даже
+// когда атакующих не находилось. Теперь оба прохода слиты в один: пока
+// consider() идёт по кандидатам в радиусе, попутно, тем же единственным
+// проходом, проверяется attackTargetId === u.id — итог тот же самый набор
+// данных, но без отдельного прохода на его сбор. Возвращаемое значение и
+// приоритет "бей атакующего" не изменились ни на йоту.
 (function patchFindNearestEnemyInRangeForAttackerPriority() {
   if (typeof findNearestEnemyInRange !== "function") return;
-  const _findNearestEnemyInRange = findNearestEnemyInRange;
   findNearestEnemyInRange = function (u, range) {
-    // Сперва честно собираем ВСЕХ врагов в радиусе (юниты+здания), как
-    // делал бы оригинал — но не выходим сразу с первой находкой, а
-    // запоминаем и глобально ближайшего (фолбэк, поведение "как было"),
-    // и ближайшего СРЕДИ атакующих (новый приоритет). Не вызываем
-    // _findNearestEnemyInRange повторно на другую цель — считаем сами за
-    // один проход, чтобы не дублировать O(n) дважды на каждый тик.
-    const attackers = attackerCandidateIds(u.id);
-    if (attackers.size === 0) {
-      // Никто нас не атакует — быстрый путь, поведение старой функции
-      // бит-в-бит (не тратим лишний проход по attackers впустую).
-      return _findNearestEnemyInRange(u, range);
-    }
-
     let bestAny = null, bestAnyD = Infinity;
     let bestAttacker = null, bestAttackerD = Infinity;
 
@@ -95,14 +82,13 @@ function attackerCandidateIds(selfId) {
       const d = dist(u.x, u.y, other.x, other.y);
       if (d > range) return;
       if (d < bestAnyD) { bestAny = other; bestAnyD = d; }
-      if (attackers.has(other.id) && d < bestAttackerD) { bestAttacker = other; bestAttackerD = d; }
+      if (other.attackTargetId === u.id && d < bestAttackerD) { bestAttacker = other; bestAttackerD = d; }
     }
     Object.values(State.units).forEach(consider);
     Object.values(State.buildings).forEach(consider);
 
     // Приоритет: ближайший из тех, кто нас атакует. Если таких в радиусе
-    // не нашлось (attackers непустой, но конкретно эти объекты вне range
-    // или уже мертвы) — обычный фолбэк на глобально ближайшего врага.
+    // не нашлось — обычный фолбэк на глобально ближайшего врага.
     return bestAttacker || bestAny;
   };
 })();
