@@ -243,10 +243,14 @@ function findZoneBuildSpot(key, hq, zone, frontAngle) {
 // сразу упиралось в кап. Теперь турелей растёт куда агрессивнее (почти
 // 1:1 к числу остальных построек) и кап поднят значительно выше — база
 // ИИ реально утыкана турелями, а не имеет 3-5 штук для вида.
-const ENEMY_TURRET_TARGET_CAP = 16;
+// ПРАВКА (по прямому запросу пользователя, доп. усиление): множитель поднят
+// с 0.9 до 1.3 (турелей теперь БОЛЬШЕ, чем прочих небоевых построек, а не
+// почти 1:1), кап — с 16 до 22. Минимум по-прежнему 2 (см. Math.max ниже) —
+// даже совсем маленькая база сразу получает хоть какую-то оборону.
+const ENEMY_TURRET_TARGET_CAP = 22;
 function enemyTurretTarget() {
   const substantial = enemyBuildings().filter(b => b.type !== "wall" && b.type !== "turret").length;
-  return Math.min(ENEMY_TURRET_TARGET_CAP, Math.max(2, Math.ceil(substantial * 0.9)));
+  return Math.min(ENEMY_TURRET_TARGET_CAP, Math.max(3, Math.ceil(substantial * 1.4)));
 }
 
 (function patchEnemyEconomyStepForTurretScaling() {
@@ -289,13 +293,21 @@ function enemyTurretTarget() {
     }
     const comp = enemyComposition();
     const turretBlockedByTechPreference = comp.preferTechOverInfantry && !hasWarFactory;
-    // ИИ №36: ЕДИНСТВЕННАЯ смысловая правка в этой копии — было
-    // "!enemyBuildings().some(b => b.type === 'turret')" (максимум 1 турель
-    // за всю партию, не масштабировалось с размером базы), теперь сравнение
-    // со scaled-целью enemyTurretTarget() (см. выше, растёт с числом
-    // построек базы, потолок ENEMY_TURRET_TARGET_CAP=5).
+    // ИИ №36: было "!enemyBuildings().some(b => b.type === 'turret')"
+    // (максимум 1 турель за всю партию, не масштабировалось с размером
+    // базы), теперь сравнение со scaled-целью enemyTurretTarget() (см. выше,
+    // растёт с числом построек базы).
+    // ПРАВКА (по прямому запросу пользователя: "турели должны ставиться ДО
+    // казармы") — убрано условие "hasBarracks &&" перед проверкой турели.
+    // Раньше турель физически не могла появиться, пока не построена
+    // казарма (barracks строится раньше турели по порядку приоритетов
+    // выше — powerPlant -> barracks -> refinery -> ... -> turret), теперь
+    // турель доступна сразу после powerPlant, наравне с остальными
+    // приоритетами. turretBlockedByTechPreference не трогаем — та же
+    // логика (комп предпочитает технику), просто больше не завязана на
+    // казарму.
     const turretCount = enemyBuildings().filter(b => b.type === "turret").length;
-    if (hasBarracks && !turretBlockedByTechPreference &&
+    if (!turretBlockedByTechPreference &&
         turretCount < enemyTurretTarget() &&
         player.credits >= BuildingDefs.turret.cost) {
       enemyPlaceBuilding("turret");
