@@ -677,7 +677,7 @@ const BuildingDefs = {
   // UnitDefs, чтобы переиспользовать бОльшую часть боевой логики
   // (findNearestEnemyInRange и т.п.).
   turret: {
-    label: "Турель", cost: 350, hp: 300, maxHp: 300, w: 1, h: 1,
+    label: "Турель", cost: 350, hp: 70, maxHp: 70, w: 1, h: 1,
     producesPower: 0, powerUse: 15, buildTime: 5000,
     canAttack: true, attackRange: 170, attackDamage: 14, attackCooldown: 900,
     sightRange: 200, // ИИ №6: чуть больше attackRange, чтобы турель "видела" подход
@@ -719,7 +719,7 @@ const BuildingDefs = {
   // читается никаким кодом; оставлено 0, а не удалено, чтобы не менять
   // форму объекта BuildingDefs.wall без необходимости.
   wall: {
-    label: "Стена", cost: 40, hp: 220, maxHp: 220, w: 1, h: 1,
+    label: "Стена", cost: 40, hp: 90, maxHp: 90, w: 1, h: 1,
     producesPower: 0, powerUse: 0, buildTime: 0,
     sightRange: 40,
   },
