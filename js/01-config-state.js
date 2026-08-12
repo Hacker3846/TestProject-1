@@ -598,7 +598,7 @@ const UnitDefs = {
 // 05-init-world.js/06-enemy-ai.js), а не через обычное размещение, и не
 // должен появляться "недостроенным" в начале игры.
 const CONSTRUCTION_MS_BUILDING = 3000;
-const CONSTRUCTION_MS_WALL = 1000;
+const CONSTRUCTION_MS_WALL = 10000;
 
 // ИИ №46 (по прямому запросу пользователя: "лимит турелей 20") — общий
 // потолок на количество ЖИВЫХ турелей (State.buildings, type==="turret") у
