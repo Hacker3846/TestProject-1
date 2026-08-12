@@ -115,6 +115,12 @@ viewport.addEventListener("contextmenu", (e) => {
   if (!clickedEnemy) {
     clickedEnemy = Object.values(State.buildings).find(b => {
       if (b.ownerId === localPlayerId) return false;
+      // ИИ №46 (по прямому запросу пользователя: "стен вообще будто и нету
+      // пока 1 секунда не пройдёт") — призрачную стену нельзя выбрать
+      // явным кликом для приказа "атаковать" — она физически ещё не
+      // существует для боевой логики (см. те же исключения в
+      // findNearestEnemyInRange/findAttackableAt, 07-game-loop-combat.js).
+      if (b.type === "wall" && b.constructionMsLeft > 0) return false;
       if (!isWorldPointVisible(b.x, b.y)) return false;
       const def = BuildingDefs[b.type];
       const halfW = def.w * GameConfig.tileSize / 2, halfH = def.h * GameConfig.tileSize / 2;
@@ -247,6 +253,9 @@ viewport.addEventListener("contextmenu", (e) => {
     if (!clickedEnemy) {
       clickedEnemy = Object.values(State.buildings).find(b => {
         if (b.ownerId === localPlayerId) return false;
+        // ИИ №46: та же защита от выбора призрачной стены, что и в
+        // обработчике мыши выше в этом файле.
+        if (b.type === "wall" && b.constructionMsLeft > 0) return false;
         if (!isWorldPointVisible(b.x, b.y)) return false;
         const def = BuildingDefs[b.type];
         const halfW = def.w * GameConfig.tileSize / 2, halfH = def.h * GameConfig.tileSize / 2;

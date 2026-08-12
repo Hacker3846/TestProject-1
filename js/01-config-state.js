@@ -584,6 +584,40 @@ const UnitDefs = {
   // забыть bodyRadius) плюс gunship дополнительно требует flying:true.
 };
 
+// ИИ №46 (по прямому запросу пользователя: "время создания зданий 3 секунды,
+// стен 1 секунду, пока строится здание ему можно нанести урон, но само
+// здание не рабочее, а стен вообще будто и нету пока 1 секунда не пройдёт")
+// — время физического ВОЗВЕДЕНИЯ постройки (не путать с BuildingDefs[...].buildTime
+// у зданий с produces — тот buildTime про очередь НАЙМА ЮНИТОВ внутри уже
+// готового здания, см. tryTrainUnit/updateProductionQueues, 10-hud.js/
+// 07-game-loop-combat.js, это другая, уже существовавшая механика).
+// CONSTRUCTION_MS_BUILDING — обычные здания (всё, кроме wall/commandCenter).
+// CONSTRUCTION_MS_WALL — стена, отдельное (меньшее) время по прямому
+// требованию пользователя. commandCenter НЕ участвует — единственный штаб
+// ставится один раз при старте партии (initLocalPlayer/initEnemyStub,
+// 05-init-world.js/06-enemy-ai.js), а не через обычное размещение, и не
+// должен появляться "недостроенным" в начале игры.
+const CONSTRUCTION_MS_BUILDING = 3000;
+const CONSTRUCTION_MS_WALL = 1000;
+
+// ИИ №46 (по прямому запросу пользователя: "лимит турелей 20") — общий
+// потолок на количество ЖИВЫХ турелей (State.buildings, type==="turret") у
+// ОДНОГО владельца одновременно. Считаются и полностью построенные, и ещё
+// строящиеся (constructionMsLeft>0) турели этого владельца — иначе игрок
+// мог бы держать очередь из десятков одновременно строящихся турелей поверх
+// лимита, который снял бы только сам факт "ещё не достроена". Проверяется
+// в tryStartBuilding/confirmBuildPlacement (10-hud.js, игрок) и в
+// enemyEconomyStep (06-enemy-ai.js, ИИ) — обе стороны используют одну и ту
+// же функцию countOwnerTurrets() ниже как единственный источник истины.
+const TURRET_LIMIT_PER_PLAYER = 20;
+function countOwnerTurrets(ownerId) {
+  let n = 0;
+  Object.values(State.buildings).forEach(b => {
+    if (b.ownerId === ownerId && b.type === "turret") n++;
+  });
+  return n;
+}
+
 const BuildingDefs = {
   commandCenter: {
     label: "Штаб", cost: 0, hp: 1000, maxHp: 1000, w: 3, h: 3,
@@ -679,8 +713,11 @@ const BuildingDefs = {
   // клетки. cost/hp низкие относительно turret — не боевое здание, а
   // дешёвый расходуемый периметр, который строят массово (протяжкой,
   // много клеток за раз, см. wallChainCommit в 18-walls.js). buildTime:0 —
-  // стена ставится мгновенно по клику/протяжке, как и было задумано в
-  // 18-walls.js (там нет обработки очереди постройки для wall).
+  // это поле НЕ про физическое время возведения (см. ИИ №46,
+  // CONSTRUCTION_MS_WALL выше — вот та величина, 1 секунда), у стены нет
+  // produces/buildQueue юнитов, поэтому buildTime здесь фактически не
+  // читается никаким кодом; оставлено 0, а не удалено, чтобы не менять
+  // форму объекта BuildingDefs.wall без необходимости.
   wall: {
     label: "Стена", cost: 40, hp: 220, maxHp: 220, w: 1, h: 1,
     producesPower: 0, powerUse: 0, buildTime: 0,

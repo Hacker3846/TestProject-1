@@ -69,7 +69,13 @@ let _wallListCacheTick = -1, _wallListCache = null;
 function _cachedWallList() {
   const tick = (typeof State !== "undefined" && State.tick) || 0;
   if (_wallListCacheTick !== tick || _wallListCache === null) {
-    _wallListCache = Object.values(State.buildings).filter(b => b.type === "wall");
+    // ИИ №46: призрачные (constructionMsLeft>0) стены исключены из списка
+    // "соседей" для скрытия граней/заглушки щелей — пока стена ещё не
+    // достроена, она визуально отдельный полупрозрачный призрак (см.
+    // drawBuildingShape ниже), а не часть сплошного периметра, поэтому
+    // готовые соседние стены не должны "сливаться" гранью с ней раньше
+    // времени.
+    _wallListCache = Object.values(State.buildings).filter(b => b.type === "wall" && !(b.constructionMsLeft > 0));
     _wallListCacheTick = tick;
   }
   return _wallListCache;
@@ -308,7 +314,15 @@ function wallGapFillsWorld(wx, wy) {
 // оценивает НЕ долю от числа зданий, а реальную длину периметра bounding
 // box (см. ниже) — это единственный способ гарантировать "без зазоров"
 // независимо от того, насколько плотно/просторно расставлены здания.
-const ENEMY_WALL_TARGET_CAP = 90;           // достаточно высокий потолок, чтобы не резать реальный периметр компактной базы
+// ПРАВКА (ИИ №48, по прямому запросу пользователя: "владеет только
+// стенами"): было 90 — на практике периметр компактной базы (после
+// кластеризации 19-...js) обычно требует заметно меньше сегментов, а
+// сам потолок в основном служил не "не резать реальный периметр", а
+// разрешением ИИ уходить в мега-крепость на сотни клеток стен, если
+// база большая. 40 по-прежнему достаточно для полного периметра типичной
+// базы (см. вывод из ENEMY_WALL_RING_RADIUS/кластеризации), просто не
+// даёт стенам стать основным потребителем экономики на крупной базе.
+const ENEMY_WALL_TARGET_CAP = 40;           // потолок, дающий полный периметр компактной базы, не превращающий её в мега-крепость
 const ENEMY_WALL_TARGET_PER_BUILDING = 0.6; // фолбэк-эвристика, используется только если геометрические хелперы 19-...js недоступны (см. enemyWallTarget ниже)
 const ENEMY_WALL_RING_RADIUS = 260;         // чуть шире обычного кольца застройки (140-220, см. enemyPlaceBuilding) — стены снаружи прочих зданий, а не между ними
 const ENEMY_WALL_RING_SPREAD = 70;
@@ -368,10 +382,15 @@ function enemyWallStep() {
     if (isEnemyBuildPlacementValid("wall", tx, ty)) {
       player.credits -= BuildingDefs.wall.cost;
       const id = uid("b");
+      // ИИ №46: та же механика возведения/призрачного состояния, что и у
+      // стены игрока (см. buildSingleWall выше) — стена ИИ тоже проходит
+      // через 1 секунду constructionMsLeft, иначе игрок мог бы бить
+      // "непостроенную" вражескую стену, а свою — нет, что несимметрично.
       State.buildings[id] = {
         id, ownerId: enemyPlayerId, type: "wall",
         x: tx, y: ty, hp: BuildingDefs.wall.hp, maxHp: BuildingDefs.wall.hp,
         rallyX: tx, rallyY: ty, buildQueue: [],
+        constructionMsLeft: CONSTRUCTION_MS_WALL, constructionTotalMs: CONSTRUCTION_MS_WALL,
       };
       logMsg("Противник укрепляет периметр стеной", "enemy");
       return;
@@ -618,10 +637,26 @@ function buildSingleWall(worldPoint) {
   if (player.credits < BuildingDefs.wall.cost) return false;
   player.credits -= BuildingDefs.wall.cost;
   const id = uid("b");
+  // ИИ №46 (по прямому запросу пользователя: "стены... время 1 секунду...
+  // стены вообще будто и нету пока 1 секунда не пройдёт и он не перейдёт
+  // из призрачного состояния в настоящее, это чтобы не пытались ломать
+  // непостроенную стену") — стена появляется в State.buildings сразу
+  // (нужна для рендера призрака/прогресс-бара и чтобы isBuildPlacementValid
+  // видела её как занятое место для СЛЕДУЮЩЕЙ соседней стены сразу же, не
+  // дожидаясь секунды — иначе цепочка протяжки могла бы наложить две
+  // стены на одну клетку), но с constructionMsLeft>0 она:
+  //  - НЕ считается препятствием для патфайндинга (buildOccupancyGrid,
+  //    03-pathfinding.js, пропускает b.constructionMsLeft>0);
+  //  - НЕ может быть найдена/выбрана как цель атаки — ни автопоиском
+  //    (findNearestEnemyInRange, 07-game-loop-combat.js), ни явным кликом
+  //    игрока (09-input.js) — "будто и нету" в точности для боевой логики.
+  // Таймер тикает в gameTick (07-game-loop-combat.js), общий код с обычными
+  // зданиями — там же обнуление constructionMsLeft отключает эти исключения.
   State.buildings[id] = {
     id, ownerId: localPlayerId, type: "wall",
     x: worldPoint.x, y: worldPoint.y, hp: BuildingDefs.wall.hp, maxHp: BuildingDefs.wall.hp,
     rallyX: worldPoint.x, rallyY: worldPoint.y, buildQueue: [],
+    constructionMsLeft: CONSTRUCTION_MS_WALL, constructionTotalMs: CONSTRUCTION_MS_WALL,
   };
   return true;
 }

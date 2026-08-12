@@ -407,8 +407,16 @@ function enemyEconomyStep() {
   // старым бит-в-бит: турель сразу после барака, до завода не привязана.
   const comp = enemyComposition();
   const turretBlockedByTechPreference = comp.preferTechOverInfantry && !hasWarFactory;
+  // ИИ №46 (по прямому запросу пользователя, "лимит турелей 20") — та же
+  // общая проверка countOwnerTurrets/TURRET_LIMIT_PER_PLAYER, что и у
+  // игрока (10-hud.js, 01-config-state.js). ИИ и так строит максимум одну
+  // турель здесь (см. enemyBuildings().some(...) ниже), лимит 20 на
+  // практике не должен срабатывать для этой ветки — добавлен для
+  // консистентности правила между игроком и ИИ на случай, если поведение
+  // ИИ когда-нибудь расширят до нескольких турелей за партию.
   if (hasBarracks && !turretBlockedByTechPreference &&
       !enemyBuildings().some(b => b.type === "turret") &&
+      countOwnerTurrets(enemyPlayerId) < TURRET_LIMIT_PER_PLAYER &&
       player.credits >= BuildingDefs.turret.cost) {
     enemyPlaceBuilding("turret");
     return;
@@ -551,15 +559,34 @@ function enemyPlaceBuilding(key) {
 
   player.credits -= def.cost;
   const id = uid("b");
+  // ИИ №46: та же механика возведения, что у построек игрока (10-hud.js) —
+  // здание ИИ тоже появляется сразу (можно атаковать), но не рабочее, пока
+  // не пройдёт CONSTRUCTION_MS_BUILDING (см. 01-config-state.js). key здесь
+  // никогда не "wall" (см. комментарий про snapBuildingCenterToGrid выше в
+  // этой же функции) — постройка стен ИИ идёт отдельным путём, enemyWallStep
+  // (18-walls.js), которая уже сама выставляет constructionMsLeft/
+  // CONSTRUCTION_MS_WALL.
   State.buildings[id] = {
     id, ownerId: enemyPlayerId, type: key,
     x: bx, y: by, hp: def.hp, maxHp: def.hp,
     rallyX: bx + 30, rallyY: by + 30, buildQueue: [],
+    constructionMsLeft: CONSTRUCTION_MS_BUILDING, constructionTotalMs: CONSTRUCTION_MS_BUILDING,
   };
-  logMsg(`Противник построил: ${def.label}`, "enemy");
+  logMsg(`Противник строит: ${def.label}`, "enemy");
 }
 
 function enemyQueueUnit(key, building) {
+  // ИИ №46 (та же правка, что и в tryTrainUnit, 10-hud.js, "пока строится
+  // здание... само здание не рабочее"): здание с constructionMsLeft>0 ещё
+  // не готово и не может ничего производить. Раньше эта проверка была
+  // добавлена только в tryTrainUnit (найм игрока) — enemyQueueUnit оставался
+  // непропатченным, из-за чего ИИ мог нанимать юнитов в только что
+  // заложенном, ещё строящемся здании (casus: barracks.length===0 выше по
+  // коду проверяет только наличие здания, не его готовность). Молчаливый
+  // return здесь безопасен: кредиты списываются НИЖЕ этой проверки, так что
+  // при отказе они не тратятся — ИИ просто повторит попытку на следующем
+  // decision-тике (см. вызовы в enemyBuildupStep).
+  if (building.constructionMsLeft > 0) return;
   const def = UnitDefs[key];
   const player = State.players[enemyPlayerId];
   if (player.credits < def.cost) return;

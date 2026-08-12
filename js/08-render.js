@@ -45,6 +45,19 @@ function cachedLinearGradient(x0, y0, x1, y1, colorA, colorB, key) {
   }
   return g;
 }
+// ВАЖНОЕ ОГРАНИЧЕНИЕ этого кэша (зафиксировано здесь, чтобы не наступить на
+// те же грабли повторно): CanvasGradient физически хранит координаты x0..x1
+// в АБСОЛЮТНОЙ системе координат, действовавшей в момент createLinearGradient
+// — он не пересчитывается под текущий CTM при каждом fill(). Кэш по ключу
+// корректен ТОЛЬКО когда вызывающий код рисует в ЛОКАЛЬНЫХ координатах ПОСЛЕ
+// ctx.translate/rotate к общей точке (как делает вся техника: drawTank и
+// т.д. — translate(s.x,s.y) → rotate → fill в координатах вида (0,-h/2)).
+// Для объектов, которые рисуются в АБСОЛЮТНЫХ мировых координатах без
+// per-object translate (как здания, см. drawBuildingShape) — кэшировать
+// градиент по (x0,y0,x1,y1) НЕЛЬЗЯ: два здания одного типа/цвета в разных
+// точках экрана получили бы градиент, "залипший" на координатах первого
+// отрисованного. Для зданий вместо этого используется clip()+fillRect
+// (solid-заливка, без Gradient вообще) — см. drawBuildingShape.
 
 // Возвращает (и лениво создаёт) приватный визуальный стейт объекта.
 function visState(obj) {
@@ -331,27 +344,57 @@ function drawBuilding(b, t) {
   const spawnAge = t - vis.spawnT;
   const spawnScale = spawnAge < 260 ? 0.7 + 0.3 * easeOutBack(Math.min(1, spawnAge / 260)) : 1;
 
+  // ИИ №46 (по прямому запросу пользователя: "время создания зданий 3
+  // секунды, стен 1 секунду... а стен вообще будто и нету пока 1 секунда
+  // не пройдёт") — визуальная сторона возведения:
+  //  - обычное строящееся здание рисуется полупрозрачным (READABLE, но
+  //    заметно отличимым от готового) — оно физически СУЩЕСТВУЕТ (можно
+  //    атаковать), просто ещё не рабочее, поэтому alpha умеренная (0.55);
+  //  - строящаяся стена — "призрак", почти невидима (alpha 0.22) и без
+  //    контурной обводки/деталей, в духе drawBuildGhost (10-hud.js/09-input.js
+  //    ghost-превью размещения) — читается как "тут скоро будет стена", а не
+  //    как уже стоящий объект, ровно то самое требование "будто и нету".
+  const underConstruction = b.constructionMsLeft > 0;
+  const constructionAlpha = underConstruction
+    ? (b.type === "wall" ? 0.22 : 0.55)
+    : 1;
+
   ctx.save();
   ctx.translate(s.x, s.y);
   ctx.scale(spawnScale, spawnScale);
   ctx.translate(-s.x, -s.y);
+  if (constructionAlpha < 1) ctx.globalAlpha *= constructionAlpha;
 
-  // мягкая тень на земле — придаёт объём плоскому спрайту
+  // ИИ (визуал, редизайн по запросу пользователя "улучшить всю графику" +
+  // явное требование не грузить рендер): тень была слишком слабой (alpha
+  // 0.35, тонкий эллипс) — здания визуально "парили" над землёй. НЕ
+  // используем ctx.createRadialGradient — здание рисуется каждый кадр, а
+  // градиент как объект CanvasGradient создавался бы заново все 45 раз в
+  // секунду на КАЖДОЕ здание в кадре (та же проблема, что чинится ниже у
+  // основного корпуса через кэш). Вместо градиента — два плоских альфа-
+  // эллипса друг на друге (без градиента, значит без пересоздания
+  // объекта): широкий бледный + узкий тёмный по центру — даёт похожий
+  // мягкий край почти бесплатно, всего 2 лишних fill() на здание.
   ctx.save();
-  ctx.globalAlpha = 0.35;
-  ctx.fillStyle = "#000";
+  ctx.fillStyle = "rgba(0,0,0,0.22)";
   ctx.beginPath();
-  ctx.ellipse(s.x, s.y + h / 2 + 3, w / 2 + 3, 6, 0, 0, Math.PI * 2);
+  ctx.ellipse(s.x, s.y + h / 2 + 2, w / 2 + 8, 9, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = "rgba(0,0,0,0.4)";
+  ctx.beginPath();
+  ctx.ellipse(s.x, s.y + h / 2 + 1, w / 2 + 2, 5, 0, 0, Math.PI * 2);
   ctx.fill();
   ctx.restore();
 
   drawBuildingBody(b, def, s, w, h, baseColor, t);
 
-  // ИИ (визуал): горящие повреждённые здания — классический RTS-сигнал
-  // "эта постройка в беде", читается издалека без необходимости смотреть на
-  // hp-бар. Порог 50% — здание уже подгорает, но ещё не критично; ниже 25%
-  // добавляется более густой/крупный дым поверх того же огня.
-  if (b.hp < b.maxHp * 0.5) {
+  // ИИ №46: "горящее повреждённое здание" — сигнал именно про урон/бой, а
+  // не про стройку. Строящееся здание физически ещё не всё "на своём
+  // месте" (визуально полупрозрачно, см. constructionAlpha выше) — огонь
+  // поверх него читался бы как "уже горит и вот-вот погибнет", что неверно
+  // для здания, которое просто ещё не готово. Показываем огонь, только
+  // если здание уже достроено (не underConstruction) И повреждено.
+  if (!underConstruction && b.hp < b.maxHp * 0.5) {
     drawBuildingFire(b, s, w, h, t);
   }
 
@@ -366,9 +409,27 @@ function drawBuilding(b, t) {
     ctx.restore();
   }
 
-  // hp bar (только если здание не в полном здоровье ИЛИ выделено — чтобы не
-  // засорять экран баром на 100% HP у построек, которые никто не трогал)
-  if (b.hp < b.maxHp - 0.5 || State.selection.has(b.id)) {
+  // ИИ №46: пока здание строится — над ним прогресс-бар возведения (не
+  // hp-бар: hp у строящегося здания почти всегда полный, бар постройки
+  // несёт более полезную информацию — "сколько ещё ждать"). Показываем
+  // ВСЕГДА во время стройки (не только при выделении) — так игрок видит
+  // остаток времени по всей своей застройке одним взглядом на карту, а не
+  // только когда кликнул на конкретное здание.
+  // ИИ №46: прогресс-бар возведения рисуется ПОЛНОЙ непрозрачностью, а не
+  // приглушённой constructionAlpha — иначе у стены (alpha 0.22, "призрак")
+  // сам бар был бы почти невидим, что противоречит цели показать игроку,
+  // сколько ещё ждать. Отдельный save/restore с globalAlpha=1 (не *=) —
+  // сбрасываем именно нашу приглушённость этого блока, не трогая внешние
+  // globalAlpha, если они когда-то будут заданы вызывающим кодом выше по
+  // стеку рендера.
+  if (underConstruction) {
+    ctx.save();
+    ctx.globalAlpha = 1;
+    drawConstructionBar(s.x - w / 2, s.y - h / 2 - 9, w, b.constructionMsLeft, b.constructionTotalMs || CONSTRUCTION_MS_BUILDING);
+    ctx.restore();
+  } else if (b.hp < b.maxHp - 0.5 || State.selection.has(b.id)) {
+    // hp bar (только если здание не в полном здоровье ИЛИ выделено — чтобы
+    // не засорять экран баром на 100% HP у построек, которые никто не трогал)
     drawHpBar(s.x - w / 2, s.y - h / 2 - 9, w, b.hp, b.maxHp);
   }
 
@@ -412,20 +473,21 @@ function drawBuilding(b, t) {
 function drawBuildingBody(b, def, s, w, h, baseColor, t) {
   drawBuildingShape(b.type, s, w, h, baseColor);
 
-  // огоньки-индикаторы вдоль нижнего края — мигают асинхронно по фазе tick,
-  // условно показывают "здание запитано и работает". Держим поверх любой
-  // формы корпуса — читаемый общий язык для "живое здание", независимо от
-  // конкретного силуэта.
-  const y0 = s.y - h / 2;
-  const lightCount = Math.max(2, Math.round(w / 14));
-  for (let i = 0; i < lightCount; i++) {
-    const lx = s.x - w / 2 + (w / (lightCount + 1)) * (i + 1);
-    const phase = Math.sin(t / 500 + i * 1.7);
-    const on = phase > -0.2;
-    ctx.fillStyle = on ? "rgba(230,188,58,0.9)" : "rgba(60,50,20,0.6)";
-    if (on) { ctx.shadowColor = "rgba(230,188,58,0.8)"; ctx.shadowBlur = 4; }
-    ctx.beginPath(); ctx.arc(lx, y0 + h - 5, 1.6, 0, Math.PI * 2); ctx.fill();
-    ctx.shadowBlur = 0;
+  // ИИ №46: огоньки-индикаторы означают "здание запитано и работает" —
+  // строящееся здание ещё не рабочее, поэтому огоньки во время стройки не
+  // рисуются (не только по эстетике: они означали бы неверную информацию).
+  if (!(b.constructionMsLeft > 0)) {
+    const y0 = s.y - h / 2;
+    const lightCount = Math.max(2, Math.round(w / 14));
+    for (let i = 0; i < lightCount; i++) {
+      const lx = s.x - w / 2 + (w / (lightCount + 1)) * (i + 1);
+      const phase = Math.sin(t / 500 + i * 1.7);
+      const on = phase > -0.2;
+      ctx.fillStyle = on ? "rgba(230,188,58,0.9)" : "rgba(60,50,20,0.6)";
+      if (on) { ctx.shadowColor = "rgba(230,188,58,0.8)"; ctx.shadowBlur = 4; }
+      ctx.beginPath(); ctx.arc(lx, y0 + h - 5, 1.6, 0, Math.PI * 2); ctx.fill();
+      ctx.shadowBlur = 0;
+    }
   }
 
   // деталь по роли здания
@@ -470,51 +532,83 @@ const BuildingAccent = {
 };
 function drawBuildingShape(type, s, w, h, baseColor) {
   const x0 = s.x - w / 2, y0 = s.y - h / 2;
-  const grad = ctx.createLinearGradient(0, y0, 0, y0 + h);
-  grad.addColorStop(0, lighten(baseColor, 18));
-  grad.addColorStop(1, darken(baseColor, 22));
+  // ИИ (визуал, редизайн по запросу пользователя "улучшить всю графику",
+  // + явное требование не грузить телефон сильнее): раньше здесь был
+  // ctx.createLinearGradient пересоздаваемый КАЖДЫЙ кадр на КАЖДОЕ здание.
+  // Первая попытка закэшировать градиент (см. историю правки) оказалась
+  // НЕКОРРЕКТНОЙ: CanvasGradient физически хранит координаты в абсолютной
+  // системе координат, заданной в МОМЕНТ createLinearGradient — в отличие
+  // от техники (drawTank и т.д.), здания рисуются БЕЗ ctx.translate вокруг
+  // каждого объекта, поэтому один и тот же кэшированный объект градиента
+  // лёг бы в РАЗНЫЕ места экрана некорректно для каждого следующего здания
+  // с иным y0. Оборачивать всю функцию (7 разных форм, ~200 строк) в
+  // translate — слишком высокий риск сломать геометрию силуэтов ради
+  // экономии.
+  //
+  // Решение: ВООБЩЕ не создавать CanvasGradient на здание. baseColor —
+  // это цвет игрока, известный заранее (lighten/darken уже кэшируются по
+  // строке, см. _lightenCache в шапке файла) — поэтому "верх светлее, низ
+  // темнее" делается ДВУМЯ ПЛОСКИМИ SOLID-заливками (без градиента вообще,
+  // дешевле любого, даже верно закэшированного CanvasGradient): сначала
+  // вся форма основным (средним) цветом, затем поверх — только нижняя
+  // половина силуэта затемняющим полупрозрачным fillRect. Даёт тот же
+  // читаемый "верх/низ", вообще без createLinearGradient на кадр.
+  const bodyColor = baseColor; // сама форма — чистый цвет фракции, без lighten/darken пересчёта на каждый кадр
+  const shadeColor = "rgba(0,0,0,0.30)"; // затемнение нижней половины поверх bodyColor — солид, не градиент
 
   // БАГФИКС (по прямому запросу пользователя: "здания немного большие,
   // заходят за клетку пикселей на 3-5"): canvas stroke() центрирует линию
-  // НА контуре пути, а не внутри него — при lineWidth 1.5 половина линии
-  // (0.75px) физически выходит ЗА x0..x0+w/y0..y0+h, ровно ту границу,
-  // которую isBuildPlacementValid/snapBuildingCenterToGrid считают
-  // footprint здания на тайловой сетке. У впритык поставленных соседних
-  // зданий (после фикса BUILD_GAP=0, 10-hud.js) обводки визуально
-  // перекрывались этим на 1.5px суммарно на стыке (по 0.75px с каждой
-  // стороны). SI — половина стандартной толщины обводки контура (1.5),
-  // используется как инсет для боковых x0/x0+w везде, где форма идёт
-  // вплотную к боковым границам клетки (что справедливо для всех типов —
-  // только верх/низ у некоторых форм имеет отступ под крышу/навес, бока
-  // всегда полная w). Верхний/нижний контур НЕ трогаю симметрично —
-  // формы с отступом (barracks/warFactory/airfield/refinery) и так не
-  // достают до верхней/нижней границы footprint, а у commandCenter/
-  // powerPlant/фолбэк, которые используют полный h, инсет применяется по
-  // всем 4 сторонам одинаково (см. их код ниже).
-  const SI = 0.75;
+  // НА контуре пути, а не внутри него — половина lineWidth физически
+  // выходит ЗА x0..x0+w/y0..y0+h, ровно ту границу, которую
+  // isBuildPlacementValid/snapBuildingCenterToGrid считают footprint
+  // здания на тайловой сетке. SI — половина ТЕКУЩЕЙ толщины обводки
+  // контура (2, см. STROKE_W ниже), используется как инсет для боковых
+  // x0/x0+w везде, где форма идёт вплотную к боковым границам клетки (что
+  // справедливо для всех типов — только верх/низ у некоторых форм имеет
+  // отступ под крышу/навес, бока всегда полная w). Верхний/нижний контур
+  // НЕ трогаю симметрично — формы с отступом (barracks/warFactory/
+  // airfield/refinery) и так не достают до верхней/нижней границы
+  // footprint, а у commandCenter/powerPlant/фолбэк, которые используют
+  // полный h, инсет применяется по всем 4 сторонам одинаково.
+  const STROKE_W = 2;
+  const SI = STROKE_W / 2;
+
+  // Общая функция затенения нижней половины уже нарисованной формы —
+  // clip() по тому же контуру, что и заливка, + fillRect затемняющим
+  // цветом только на нижнюю часть. Честно про цену: это добавляет
+  // save/clip/restore на здание (не бесплатно), но заменяет собой
+  // createLinearGradient+addColorStop×2-3 (дороже — интерполятор цвета,
+  // а не просто маска пути) — чистый выигрыш, а не нулевая стоимость.
+  function shadeLowerHalf(clipFn, top, bottom) {
+    ctx.save();
+    clipFn();
+    ctx.clip();
+    ctx.fillStyle = shadeColor;
+    ctx.fillRect(x0 - 4, top + (bottom - top) * 0.42, w + 8, (bottom - top) * 0.58 + 4);
+    ctx.restore();
+  }
 
   if (type === "commandCenter") {
     // многоярусный штаб — широкое основание + приподнятая узкая надстройка
     // по центру (второй "этаж"), самое крупное и самое "архитектурное"
     // здание в игре, как и полагается главной постройке.
-    ctx.fillStyle = grad;
+    ctx.fillStyle = bodyColor;
     roundRect(x0 + SI, y0 + SI, w - SI * 2, h - SI * 2, 4);
     ctx.fill();
-    ctx.strokeStyle = "rgba(0,0,0,0.55)"; ctx.lineWidth = 1.5;
+    shadeLowerHalf(() => roundRect(x0 + SI, y0 + SI, w - SI * 2, h - SI * 2, 4), y0, y0 + h);
+    ctx.strokeStyle = "rgba(0,0,0,0.7)"; ctx.lineWidth = STROKE_W;
     roundRect(x0 + SI, y0 + SI, w - SI * 2, h - SI * 2, 4); ctx.stroke();
 
     const innerW = w * 0.52, innerH = h * 0.46;
     const ix0 = s.x - innerW / 2, iy0 = s.y - h / 2 - innerH * 0.32;
-    const innerGrad = ctx.createLinearGradient(0, iy0, 0, iy0 + innerH);
-    innerGrad.addColorStop(0, lighten(baseColor, 30));
-    innerGrad.addColorStop(1, darken(baseColor, 12));
-    ctx.fillStyle = innerGrad;
+    ctx.fillStyle = lighten(baseColor, 20);
     roundRect(ix0, iy0, innerW, innerH, 3);
     ctx.fill();
-    ctx.strokeStyle = "rgba(0,0,0,0.5)"; ctx.lineWidth = 1.2;
+    shadeLowerHalf(() => roundRect(ix0, iy0, innerW, innerH, 3), iy0, iy0 + innerH);
+    ctx.strokeStyle = "rgba(0,0,0,0.6)"; ctx.lineWidth = 1.4;
     roundRect(ix0, iy0, innerW, innerH, 3); ctx.stroke();
 
-    ctx.strokeStyle = "rgba(0,0,0,0.25)"; ctx.lineWidth = 1;
+    ctx.strokeStyle = "rgba(0,0,0,0.32)"; ctx.lineWidth = 1;
     const cols = Math.max(1, Math.round(w / 22));
     for (let i = 1; i < cols; i++) {
       const px = x0 + (w / cols) * i;
@@ -528,25 +622,32 @@ function drawBuildingShape(type, s, w, h, baseColor) {
     const iw = w - SI * 2, ih = h - SI * 2;
     const ix0 = x0 + SI, iy0 = y0 + SI;
     const cut = Math.min(iw, ih) * 0.28;
-    ctx.fillStyle = grad;
-    ctx.beginPath();
-    ctx.moveTo(ix0 + cut, iy0); ctx.lineTo(ix0 + iw - cut, iy0);
-    ctx.lineTo(ix0 + iw, iy0 + cut); ctx.lineTo(ix0 + iw, iy0 + ih - cut);
-    ctx.lineTo(ix0 + iw - cut, iy0 + ih); ctx.lineTo(ix0 + cut, iy0 + ih);
-    ctx.lineTo(ix0, iy0 + ih - cut); ctx.lineTo(ix0, iy0 + cut);
-    ctx.closePath(); ctx.fill();
-    ctx.strokeStyle = "rgba(0,0,0,0.55)"; ctx.lineWidth = 1.5; ctx.stroke();
+    const octagonPath = () => {
+      ctx.beginPath();
+      ctx.moveTo(ix0 + cut, iy0); ctx.lineTo(ix0 + iw - cut, iy0);
+      ctx.lineTo(ix0 + iw, iy0 + cut); ctx.lineTo(ix0 + iw, iy0 + ih - cut);
+      ctx.lineTo(ix0 + iw - cut, iy0 + ih); ctx.lineTo(ix0 + cut, iy0 + ih);
+      ctx.lineTo(ix0, iy0 + ih - cut); ctx.lineTo(ix0, iy0 + cut);
+      ctx.closePath();
+    };
+    ctx.fillStyle = bodyColor;
+    octagonPath(); ctx.fill();
+    shadeLowerHalf(octagonPath, iy0, iy0 + ih);
+    ctx.strokeStyle = "rgba(0,0,0,0.7)"; ctx.lineWidth = STROKE_W;
+    octagonPath(); ctx.stroke();
   } else if (type === "barracks") {
     // покатая двускатная крыша ангара — треугольный конёк поверх нижнего
     // прямоугольного основания, как классический казарменный барак.
     // Инсет по бокам (x0+SI..x0+w-SI) — корпус и обводка не выходят за
     // боковые границы клетки; верх намеренно не трогаю (крыша уже с
     // отступом от верхней границы footprint через h*0.22).
-    ctx.fillStyle = grad;
-    roundRect(x0 + SI, y0 + h * 0.22, w - SI * 2, h * 0.78 - SI, 3);
+    const bTop = y0 + h * 0.22, bBottom = y0 + h;
+    ctx.fillStyle = bodyColor;
+    roundRect(x0 + SI, bTop, w - SI * 2, h * 0.78 - SI, 3);
     ctx.fill();
-    ctx.strokeStyle = "rgba(0,0,0,0.55)"; ctx.lineWidth = 1.5;
-    roundRect(x0 + SI, y0 + h * 0.22, w - SI * 2, h * 0.78 - SI, 3); ctx.stroke();
+    shadeLowerHalf(() => roundRect(x0 + SI, bTop, w - SI * 2, h * 0.78 - SI, 3), bTop, bBottom);
+    ctx.strokeStyle = "rgba(0,0,0,0.7)"; ctx.lineWidth = STROKE_W;
+    roundRect(x0 + SI, bTop, w - SI * 2, h * 0.78 - SI, 3); ctx.stroke();
 
     // БАГФИКС (по прямому запросу пользователя: "здания немного большие,
     // заходят за клетку пикселей на 3-5") — раньше скат крыши рисовался
@@ -567,28 +668,30 @@ function drawBuildingShape(type, s, w, h, baseColor) {
     ctx.lineTo(x0 + w - SI, y0 + h * 0.26);
     ctx.closePath();
     ctx.fill();
-    ctx.strokeStyle = "rgba(0,0,0,0.5)"; ctx.lineWidth = 1;
+    ctx.strokeStyle = "rgba(0,0,0,0.6)"; ctx.lineWidth = 1.2;
     ctx.stroke();
     // конёк крыши
-    ctx.strokeStyle = "rgba(0,0,0,0.35)";
+    ctx.strokeStyle = "rgba(0,0,0,0.4)";
     ctx.beginPath(); ctx.moveTo(s.x, y0); ctx.lineTo(s.x, y0 + h * 0.26); ctx.stroke();
   } else if (type === "warFactory") {
     // низкий широкий грузовой блок с выступающим козырьком-навесом над
     // воротами (см. drawFactoryDetail) — приземистее и шире казарм.
     // Инсет по бокам — см. комментарий у barracks выше, тот же приём.
-    ctx.fillStyle = grad;
-    roundRect(x0 + SI, y0 + h * 0.1, w - SI * 2, h * 0.9 - SI, 2);
+    const wfTop = y0 + h * 0.1, wfBottom = y0 + h;
+    ctx.fillStyle = bodyColor;
+    roundRect(x0 + SI, wfTop, w - SI * 2, h * 0.9 - SI, 2);
     ctx.fill();
-    ctx.strokeStyle = "rgba(0,0,0,0.55)"; ctx.lineWidth = 1.5;
-    roundRect(x0 + SI, y0 + h * 0.1, w - SI * 2, h * 0.9 - SI, 2); ctx.stroke();
+    shadeLowerHalf(() => roundRect(x0 + SI, wfTop, w - SI * 2, h * 0.9 - SI, 2), wfTop, wfBottom);
+    ctx.strokeStyle = "rgba(0,0,0,0.7)"; ctx.lineWidth = STROKE_W;
+    roundRect(x0 + SI, wfTop, w - SI * 2, h * 0.9 - SI, 2); ctx.stroke();
 
     // козырёк-навес над будущими воротами
     ctx.fillStyle = darken(baseColor, 15);
     ctx.fillRect(x0 + w * 0.15, y0 + h * 0.1 - 5, w * 0.7, 6);
-    ctx.strokeStyle = "rgba(0,0,0,0.5)"; ctx.lineWidth = 1;
+    ctx.strokeStyle = "rgba(0,0,0,0.6)"; ctx.lineWidth = 1;
     ctx.strokeRect(x0 + w * 0.15, y0 + h * 0.1 - 5, w * 0.7, 6);
 
-    ctx.strokeStyle = "rgba(0,0,0,0.25)"; ctx.lineWidth = 1;
+    ctx.strokeStyle = "rgba(0,0,0,0.32)"; ctx.lineWidth = 1;
     const cols = Math.max(1, Math.round(w / 22));
     for (let i = 1; i < cols; i++) {
       const px = x0 + (w / cols) * i;
@@ -598,22 +701,24 @@ function drawBuildingShape(type, s, w, h, baseColor) {
     // длинная приземистая платформа с полосой ВПП по центру (контрастная
     // штрих-разметка) — единственное здание, где основной силуэт вытянут
     // по одной оси, а не квадратный блок. Инсет по бокам — та же причина.
-    ctx.fillStyle = grad;
-    roundRect(x0 + SI, y0 + h * 0.3, w - SI * 2, h * 0.7 - SI, 2);
+    const afTop = y0 + h * 0.3, afBottom = y0 + h;
+    ctx.fillStyle = bodyColor;
+    roundRect(x0 + SI, afTop, w - SI * 2, h * 0.7 - SI, 2);
     ctx.fill();
-    ctx.strokeStyle = "rgba(0,0,0,0.55)"; ctx.lineWidth = 1.5;
-    roundRect(x0 + SI, y0 + h * 0.3, w - SI * 2, h * 0.7 - SI, 2); ctx.stroke();
+    shadeLowerHalf(() => roundRect(x0 + SI, afTop, w - SI * 2, h * 0.7 - SI, 2), afTop, afBottom);
+    ctx.strokeStyle = "rgba(0,0,0,0.7)"; ctx.lineWidth = STROKE_W;
+    roundRect(x0 + SI, afTop, w - SI * 2, h * 0.7 - SI, 2); ctx.stroke();
 
     // диспетчерская вышка — маленький выступ в углу платформы
     ctx.fillStyle = darken(baseColor, 20);
     ctx.fillRect(x0 + w * 0.06, y0 + h * 0.05, w * 0.16, h * 0.3);
-    ctx.strokeStyle = "rgba(0,0,0,0.5)"; ctx.lineWidth = 1;
+    ctx.strokeStyle = "rgba(0,0,0,0.6)"; ctx.lineWidth = 1;
     ctx.strokeRect(x0 + w * 0.06, y0 + h * 0.05, w * 0.16, h * 0.3);
 
     // полоса ВПП — светлая дорожка с пунктирной осевой линией
-    ctx.fillStyle = "rgba(0,0,0,0.22)";
+    ctx.fillStyle = "rgba(0,0,0,0.28)";
     ctx.fillRect(x0 + w * 0.28, y0 + h * 0.42, w * 0.66, h * 0.42);
-    ctx.strokeStyle = "rgba(230,188,58,0.4)";
+    ctx.strokeStyle = "rgba(230,188,58,0.55)";
     ctx.setLineDash([5, 4]);
     ctx.beginPath(); ctx.moveTo(x0 + w * 0.3, y0 + h * 0.63); ctx.lineTo(x0 + w * 0.92, y0 + h * 0.63); ctx.stroke();
     ctx.setLineDash([]);
@@ -621,13 +726,14 @@ function drawBuildingShape(type, s, w, h, baseColor) {
     // компактный круглый бункер вместо прямоугольной плиты — единственное
     // здание с круглым основанием, сразу отличимо на карте от всех прочих.
     // Радиус уже вписан внутрь min(w,h)/2 — дополнительно уменьшаем на SI,
-    // чтобы обводка (lineWidth 1.5, центрируется на контуре) тоже не
-    // выходила за вписанную окружность.
+    // чтобы обводка тоже не выходила за вписанную окружность.
     const r = Math.min(w, h) / 2 - SI;
-    ctx.fillStyle = grad;
+    ctx.fillStyle = bodyColor;
     ctx.beginPath(); ctx.arc(s.x, s.y, r, 0, Math.PI * 2); ctx.fill();
-    ctx.strokeStyle = "rgba(0,0,0,0.55)"; ctx.lineWidth = 1.5; ctx.stroke();
-    ctx.strokeStyle = "rgba(0,0,0,0.25)"; ctx.lineWidth = 1;
+    shadeLowerHalf(() => { ctx.beginPath(); ctx.arc(s.x, s.y, r, 0, Math.PI * 2); }, s.y - r, s.y + r);
+    ctx.strokeStyle = "rgba(0,0,0,0.7)"; ctx.lineWidth = STROKE_W;
+    ctx.beginPath(); ctx.arc(s.x, s.y, r, 0, Math.PI * 2); ctx.stroke();
+    ctx.strokeStyle = "rgba(0,0,0,0.32)"; ctx.lineWidth = 1;
     ctx.beginPath(); ctx.arc(s.x, s.y, r - 3, 0, Math.PI * 2); ctx.stroke();
   } else if (type === "refinery") {
     // ИИ №29: низкое прямоугольное основание + два вертикальных резервуара
@@ -637,33 +743,34 @@ function drawBuildingShape(type, s, w, h, baseColor) {
     // Цистерны (tankW/tankX) намеренно НЕ инсечены — они уже вписаны
     // внутрь w с запасом (0.12w/0.88w от края), обводка там не достаёт до
     // границы footprint.
-    ctx.fillStyle = grad;
-    roundRect(x0 + SI, y0 + h * 0.35, w - SI * 2, h * 0.65 - SI, 3);
+    const rfTop = y0 + h * 0.35, rfBottom = y0 + h;
+    ctx.fillStyle = bodyColor;
+    roundRect(x0 + SI, rfTop, w - SI * 2, h * 0.65 - SI, 3);
     ctx.fill();
-    ctx.strokeStyle = "rgba(0,0,0,0.55)"; ctx.lineWidth = 1.5;
-    roundRect(x0 + SI, y0 + h * 0.35, w - SI * 2, h * 0.65 - SI, 3); ctx.stroke();
+    shadeLowerHalf(() => roundRect(x0 + SI, rfTop, w - SI * 2, h * 0.65 - SI, 3), rfTop, rfBottom);
+    ctx.strokeStyle = "rgba(0,0,0,0.7)"; ctx.lineWidth = STROKE_W;
+    roundRect(x0 + SI, rfTop, w - SI * 2, h * 0.65 - SI, 3); ctx.stroke();
 
     const tankW = w * 0.24, tankH = h * 0.62;
     [x0 + w * 0.12, x0 + w * 0.88 - tankW].forEach(tx => {
       const ty = y0 - tankH * 0.15;
-      const tankGrad = ctx.createLinearGradient(0, ty, 0, ty + tankH);
-      tankGrad.addColorStop(0, lighten(baseColor, 22));
-      tankGrad.addColorStop(1, darken(baseColor, 18));
-      ctx.fillStyle = tankGrad;
+      ctx.fillStyle = lighten(baseColor, 14);
       roundRect(tx, ty, tankW, tankH, tankW * 0.4);
       ctx.fill();
-      ctx.strokeStyle = "rgba(0,0,0,0.5)"; ctx.lineWidth = 1.2;
+      shadeLowerHalf(() => roundRect(tx, ty, tankW, tankH, tankW * 0.4), ty, ty + tankH);
+      ctx.strokeStyle = "rgba(0,0,0,0.6)"; ctx.lineWidth = 1.4;
       roundRect(tx, ty, tankW, tankH, tankW * 0.4); ctx.stroke();
     });
   } else {
     // фолбэк — старое поведение (скруглённый прямоугольник + панельные
     // линии) для любого будущего типа здания без явного case выше.
-    ctx.fillStyle = grad;
+    ctx.fillStyle = bodyColor;
     roundRect(x0 + SI, y0 + SI, w - SI * 2, h - SI * 2, 3);
     ctx.fill();
-    ctx.strokeStyle = "rgba(0,0,0,0.55)"; ctx.lineWidth = 1.5;
+    shadeLowerHalf(() => roundRect(x0 + SI, y0 + SI, w - SI * 2, h - SI * 2, 3), y0, y0 + h);
+    ctx.strokeStyle = "rgba(0,0,0,0.7)"; ctx.lineWidth = STROKE_W;
     roundRect(x0 + SI, y0 + SI, w - SI * 2, h - SI * 2, 3); ctx.stroke();
-    ctx.strokeStyle = "rgba(0,0,0,0.25)"; ctx.lineWidth = 1;
+    ctx.strokeStyle = "rgba(0,0,0,0.32)"; ctx.lineWidth = 1;
     const cols = Math.max(1, Math.round(w / 22));
     for (let i = 1; i < cols; i++) {
       const px = x0 + (w / cols) * i;
@@ -671,25 +778,22 @@ function drawBuildingShape(type, s, w, h, baseColor) {
     }
   }
 
-  // акцентная окантовка по периметру — тонкая яркая рамка цвета роли здания
-  // (см. BuildingAccent), нанесена ПОВЕРХ уже нарисованной формы, поэтому
-  // работает для любого силуэта одинаково просто, не завязана на конкретный
-  // contour каждого case выше.
+  // ИИ (визуал, редизайн): акцентная окантовка (BuildingAccent) была
+  // пунктиром с alpha 0.55 поверх уже яркого baseColor — на скриншоте
+  // пользователя (реальный масштаб на телефоне) практически не читается.
+  // Теперь окантовка СПЛОШНАЯ и заметно ярче — она не градиент и не
+  // требует ctx.save/restore ради одного globalAlpha (globalAlpha убран,
+  // альфа теперь в самой rgba-строке цвета — на один вызов дешевле).
   const accent = BuildingAccent[type];
   if (accent) {
-    ctx.save();
     ctx.strokeStyle = accent;
-    ctx.globalAlpha = 0.55;
-    ctx.lineWidth = 1.6;
-    ctx.setLineDash([w * 0.16, w * 0.09]);
+    ctx.lineWidth = 2.2;
     if (type === "turret") {
       ctx.beginPath(); ctx.arc(s.x, s.y, Math.min(w, h) / 2 - 1, 0, Math.PI * 2); ctx.stroke();
     } else {
-      roundRect(x0 + 1.5, y0 + 1.5, w - 3, h - 3, 3);
+      roundRect(x0 + 1.6, y0 + 1.6, w - 3.2, h - 3.2, 3);
       ctx.stroke();
     }
-    ctx.setLineDash([]);
-    ctx.restore();
   }
 }
 
@@ -1851,6 +1955,23 @@ function drawSelectionRingAnimated(cx, cy, r, t) {
   ctx.restore();
 }
 
+// ИИ №46 (по прямому запросу пользователя: "время создания зданий 3
+// секунды, стен 1 секунду") — прогресс-бар возведения, отдельный от
+// drawHpBar по цвету (бирюзовый, а не зелёный/жёлтый/красный) — чтобы
+// "постройка ещё не готова" и "постройка повреждена" не путались визуально
+// при беглом взгляде на бар одинаковой формы.
+function drawConstructionBar(x, y, w, msLeft, totalMs) {
+  const pct = totalMs > 0 ? Math.max(0, Math.min(1, 1 - msLeft / totalMs)) : 1;
+  ctx.save();
+  ctx.fillStyle = "rgba(0,0,0,0.55)";
+  roundRect(x - 1, y - 1, w + 2, 5, 2); ctx.fill();
+  ctx.fillStyle = "#12303a";
+  roundRect(x, y, w, 3, 1.5); ctx.fill();
+  ctx.fillStyle = "#4fb8c9";
+  if (pct > 0) { roundRect(x, y, Math.max(2, w * pct), 3, 1.5); ctx.fill(); }
+  ctx.restore();
+}
+
 function drawAttackTracer(sx, sy, target, t) {
   const ts = worldToScreen(target.x, target.y);
   ctx.save();
@@ -2356,12 +2477,29 @@ function darken(hex, amt) { return lighten(hex, -amt); }
 // вообще, меняется только то, как часто перерисовывается картинка.
 const RENDER_MIN_FRAME_MS = 1000 / 45;
 
+// БАГФИКС ("spiral of death"): loop.acc копит РЕАЛЬНОЕ время между кадрами
+// (dt), а fixed-step ниже съедает его порциями по tickRateMs. Если вкладка
+// была свёрнута/фонована надолго (secondsы, а не миллисекунды — тот самый
+// случай, что уже упоминается в комментарии у MOVE_MAX_DT_MS,
+// 07-game-loop-combat.js), dt на первом кадре после возврата фокуса может
+// быть, скажем, 60000мс — без потолка ниже while-цикл выполнил бы
+// gameTick() ~600 раз ПОДРЯД синхронно, прежде чем отдать управление
+// браузеру: страница подвиснет на заметное время, и вся эта пачка тиков
+// (урон, экономика, decision-тики ИИ) отыграется как один мгновенный
+// скачок состояния. MOVE_MAX_DT_MS защищает только физический шаг ОДНОГО
+// движения внутри gameTick — от количества самих вызовов gameTick она не
+// спасает. LOOP_ACC_MAX_MS ограничивает "долг" перед симуляцией: лишнее
+// время просто отбрасывается (не досимулируется) — ровно тот же осознанный
+// компромисс, что уже применён к loop.renderAcc чуть ниже ("не накапливаем
+// долг по кадрам при коротких фризах").
+const LOOP_ACC_MAX_MS = 1000;
+
 function loop(timestamp) {
   if (!loop.last) loop.last = timestamp;
   const dt = timestamp - loop.last;
   loop.last = timestamp;
 
-  loop.acc = (loop.acc || 0) + dt;
+  loop.acc = Math.min((loop.acc || 0) + dt, LOOP_ACC_MAX_MS);
   while (loop.acc >= GameConfig.tickRateMs) {
     gameTick(GameConfig.tickRateMs);
     loop.acc -= GameConfig.tickRateMs;

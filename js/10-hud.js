@@ -261,6 +261,24 @@ function refreshBuildBarPrices() {
   bar.querySelectorAll(".buildBtn[data-build-key]").forEach(btn => {
     const key = btn.dataset.buildKey;
     const small = btn.querySelector("small");
+    // ИИ №46 (по прямому запросу пользователя, "лимит турелей 20") — кнопка
+    // турели дополнительно показывает текущий счётчик "n/20" и блокируется
+    // (disabled) по достижении лимита, вместо того чтобы молча отклонять клик
+    // только в tryStartBuilding — игрок должен ВИДЕТЬ лимит на кнопке, а не
+    // узнавать о нём только через лог после клика.
+    // БАГФИКС: раньше здесь ещё добавлялся класс limitReached, которого нет
+    // ни в одном CSS-файле проекта — он не менял внешний вид кнопки (мёртвый
+    // класс без стиля). Визуальное затемнение уже полностью обеспечивается
+    // нативным .buildBtn:disabled{opacity:.35;cursor:not-allowed;}
+    // (см. стили) через btn.disabled ниже — отдельный класс был лишним и
+    // вводил в заблуждение комментарием, будто он на что-то влияет.
+    if (key === "turret") {
+      const count = countOwnerTurrets(localPlayerId);
+      const atLimit = count >= TURRET_LIMIT_PER_PLAYER;
+      if (small) small.textContent = `${getBuildingCost(key, player)} кр. (${count}/${TURRET_LIMIT_PER_PLAYER})`;
+      btn.disabled = atLimit;
+      return;
+    }
     if (small) small.textContent = `${getBuildingCost(key, player)} кр.`;
   });
 }
@@ -293,6 +311,17 @@ function tryStartBuilding(key) {
   if (key === "commandCenter") return; // штаб не строится вручную
   const def = BuildingDefs[key];
   const player = State.players[localPlayerId];
+  // ИИ №46 (по прямому запросу пользователя, "лимит турелей 20") — проверяем
+  // ДО входа в режим размещения, чтобы игрок не тратил время на прицеливание
+  // ради постройки, которая всё равно будет отклонена в confirmBuildPlacement.
+  // countOwnerTurrets() считает и уже готовые, и ещё строящиеся турели этого
+  // игрока (см. 01-config-state.js) — оба места (здесь и confirmBuildPlacement)
+  // обязаны использовать один и тот же лимит/счётчик, иначе застройка могла
+  // бы разойтись с тем, что реально показывает кнопка.
+  if (key === "turret" && countOwnerTurrets(localPlayerId) >= TURRET_LIMIT_PER_PLAYER) {
+    logMsg(`Лимит турелей достигнут (${TURRET_LIMIT_PER_PLAYER}/${TURRET_LIMIT_PER_PLAYER})`, "warn");
+    return;
+  }
   // ИИ №35: getBuildingCost() вместо def.cost — см. 01-config-state.js.
   if (player.credits < getBuildingCost(key, player)) { logMsg("Недостаточно кредитов", "warn"); return; }
   State.buildMode = { type: key, valid: false };
@@ -402,6 +431,16 @@ function confirmBuildPlacement() {
     logMsg(outOfSight ? "Нельзя строить вне видимости — сначала разведайте эту зону" : "Здесь строить нельзя — слишком близко к другому объекту", "warn");
     return;
   }
+  // ИИ №46 (по прямому запросу пользователя, "лимит турелей 20") —
+  // страховочная повторная проверка: лимит уже проверялся в tryStartBuilding
+  // при входе в режим размещения, но между входом и подтверждением игрок
+  // мог успеть построить ещё турелей другим путём (например, было несколько
+  // кнопок в очереди кликов) — не даём проскочить лимит вторым путём.
+  if (key === "turret" && countOwnerTurrets(localPlayerId) >= TURRET_LIMIT_PER_PLAYER) {
+    logMsg(`Лимит турелей достигнут (${TURRET_LIMIT_PER_PLAYER}/${TURRET_LIMIT_PER_PLAYER})`, "warn");
+    State.buildMode = null;
+    return;
+  }
   // ИИ №35: getBuildingCost() вместо def.cost — цена refinery растёт с
   // каждой построенной станцией (см. 01-config-state.js). cost считаем
   // ОДИН раз в переменную — иначе после инкремента refineryBuiltCount ниже
@@ -416,10 +455,21 @@ function confirmBuildPlacement() {
 
   player.credits -= cost;
   const id = uid("b");
+  // ИИ №46 (по прямому запросу пользователя: "время создания зданий 3
+  // секунды... пока строится здание ему можно нанести урон, но само
+  // здание не рабочее") — здание сразу появляется в State.buildings (можно
+  // атаковать/наносить урон, см. findNearestEnemyInRange/updateDefensiveStructures,
+  // 07-game-loop-combat.js — они не фильтруют по constructionMsLeft), но с
+  // ненулевым constructionMsLeft: пока оно не истекло, здание не работает —
+  // не приносит доход (updateRefineries), не стреляет (updateDefensiveStructures),
+  // не производит юнитов/питание (updatePowerAndUnitCounts/tryTrainUnit) —
+  // см. проверки constructionMsLeft>0, добавленные в 07-game-loop-combat.js.
+  // Таймер тикает в gameTick (07-game-loop-combat.js), не здесь.
   State.buildings[id] = {
     id, ownerId: localPlayerId, type: key,
     x: wx, y: wy, hp: def.hp, maxHp: def.hp,
     rallyX: wx + 40, rallyY: wy + 40, buildQueue: [],
+    constructionMsLeft: CONSTRUCTION_MS_BUILDING, constructionTotalMs: CONSTRUCTION_MS_BUILDING,
   };
   // ИИ №35: инкремент СЧЁТЧИКА ПОКУПОК (не текущего числа станций на карте —
   // см. обоснование в 01-config-state.js) сразу после успешной постройки,
@@ -427,9 +477,12 @@ function confirmBuildPlacement() {
   // на REFINERY_PRICE_STEP выше.
   if (key === "refinery") {
     player.refineryBuiltCount = (player.refineryBuiltCount || 0) + 1;
-    logMsg(`Построено: ${def.label} (следующая станция подорожает на ${REFINERY_PRICE_STEP} кр. — теперь ${getBuildingCost(key, player)} кр.)`);
+    logMsg(`Строится: ${def.label} (следующая станция подорожает на ${REFINERY_PRICE_STEP} кр. — теперь ${getBuildingCost(key, player)} кр.)`);
   } else {
-    logMsg(`Построено: ${def.label}`);
+    // ИИ №46: "Строится", а не "Построено" — здание появляется на карте
+    // сразу (можно наносить урон), но становится рабочим только через
+    // constructionMsLeft мс (см. комментарий у State.buildings[id] выше).
+    logMsg(`Строится: ${def.label}`);
   }
   State.buildMode = null;
   refreshBuildBarActiveState();
@@ -445,10 +498,14 @@ function tryTrainUnit(key) {
   const player = State.players[localPlayerId];
   if (player.credits < def.cost) { logMsg("Недостаточно кредитов", "warn"); return; }
 
+  // ИИ №46 (по прямому запросу пользователя, "пока строится здание... само
+  // здание не рабочее") — здание с constructionMsLeft>0 ещё не готово и не
+  // может ничего производить, поэтому исключено из выбора производящего
+  // здания на обоих путях ниже (выделенное игроком / первое подходящее).
   let building = null;
   State.selection.forEach(id => {
     const b = State.buildings[id];
-    if (b && b.ownerId === localPlayerId) {
+    if (b && b.ownerId === localPlayerId && !(b.constructionMsLeft > 0)) {
       const bdef = BuildingDefs[b.type];
       if (bdef && bdef.produces && bdef.produces.includes(key)) building = b;
     }
@@ -456,11 +513,12 @@ function tryTrainUnit(key) {
   if (!building) {
     building = Object.values(State.buildings).find(b => {
       if (b.ownerId !== localPlayerId) return false;
+      if (b.constructionMsLeft > 0) return false;
       const bdef = BuildingDefs[b.type];
       return bdef && bdef.produces && bdef.produces.includes(key);
     });
   }
-  if (!building) { logMsg(`Нет здания, производящего: ${def.label}`, "warn"); return; }
+  if (!building) { logMsg(`Нет готового здания, производящего: ${def.label}`, "warn"); return; }
 
   player.credits -= def.cost;
   if (!building.buildQueue) building.buildQueue = [];

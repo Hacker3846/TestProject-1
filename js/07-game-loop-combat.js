@@ -2,18 +2,18 @@
 
 // ИИ №20: потолок dtMs, используемого ИМЕННО для физического шага движения
 // юнитов (см. коммент-обоснование у блока движения ниже, "БАГФИКС —
-// дёргается туда-сюда"). gameTick вызывается из requestAnimationFrame с
-// РЕАЛЬНОЙ дельтой между кадрами (не фиксированный tickRateMs=100 —
-// tickRateMs сейчас нигде фактически не используется как шаг симуляции,
-// это отдельный факт, см. TODO при желании сделать полноценный fixed-step).
-// На лаг-спайке (вкладка была в фоне и вернулась в фокус, GC-пауза,
-// медленный кадр) dtMs может быть аномально большим (сотни мс, после
-// длительного сворачивания вкладки — секунды), что раньше приводило к
-// огромному "step" за один кадр и проскакиванию юнитом его текущей цели
-// движения насквозь. 100мс — сознательно равно "одному логическому тику"
-// по духу проекта (см. tickRateMs), достаточно щедро для обычных
-// просадок FPS (тройной кадр при 60fps все ещё укладывается), но не даёт
-// одному кадру эмулировать секунды движения разом.
+// дёргается туда-сюда").
+// УТОЧНЕНИЕ (было неточно описано здесь раньше): gameTick НЕ вызывается
+// напрямую из requestAnimationFrame с сырой дельтой кадра — цикл рендера
+// (loop() в 08-render.js) использует fixed-step с аккумулятором и всегда
+// вызывает gameTick(GameConfig.tickRateMs), т.е. dtMs на входе в gameTick
+// равен РОВНО tickRateMs (100мс) на каждый вызов, никогда больше. Поэтому
+// safeDtMs = Math.min(dtMs, MOVE_MAX_DT_MS) ниже по факту всегда равен
+// dtMs — это защита "на будущее"/от рассинхронизации, а не активно
+// срабатывающий клампинг при текущей реализации цикла. Сам сценарий "вкладка
+// была в фоне, вернулась в фокус, накопилась секунда+ реального времени"
+// по-прежнему актуален, но обрабатывается на уровне loop.acc в 08-render.js
+// (см. LOOP_ACC_MAX_MS там) — там реальный источник больших dt, не здесь.
 const MOVE_MAX_DT_MS = 100;
 
 // ИИ №29: findNearestDropoff/весь харвест-конвейер (ноды, cargo, "returning")
@@ -32,6 +32,10 @@ const MOVE_MAX_DT_MS = 100;
 function updateRefineries() {
   Object.values(State.buildings).forEach(b => {
     if (b.hp <= 0) return;
+    // ИИ №46 (по прямому запросу пользователя, "пока строится здание...
+    // само здание не рабочее") — строящееся здание (штаб/refinery) пока не
+    // приносит доход, даже если формально уже стоит на карте.
+    if (b.constructionMsLeft > 0) return;
     const def = BuildingDefs[b.type];
     if (!def || !def.incomePerTick) return;
     const player = State.players[b.ownerId];
@@ -40,8 +44,37 @@ function updateRefineries() {
   });
 }
 
+// ИИ №46 (по прямому запросу пользователя: "время создания зданий 3
+// секунды, стен 1 секунду... пока строится здание ему можно нанести урон,
+// но само здание не рабочее") — тикает constructionMsLeft у ВСЕХ построек
+// (свои + вражеские, обычные здания + стены — единая точка для обоих типов
+// таймера из 01-config-state.js). Здание/стена уже получает урон как
+// обычно (killBuilding/hp — общий путь, ничего не меняется), этот блок
+// только следит, когда постройка "созревает" (constructionMsLeft доходит
+// до 0 и обнуляется — дальше все проверки вида `b.constructionMsLeft > 0`
+// по всему проекту становятся false, и здание/стена начинает работать/
+// быть видимой боевой логике как обычно). Специально НЕ тикаем по
+// powerRateMultiplier (в отличие от updateProductionQueues) — дефицит
+// питания не должен растягивать время самой стройки постройки, только
+// очередь юнитов внутри уже готового здания.
+function updateConstruction(dtMs) {
+  Object.values(State.buildings).forEach(b => {
+    if (!(b.constructionMsLeft > 0)) return;
+    b.constructionMsLeft -= dtMs;
+    if (b.constructionMsLeft <= 0) {
+      b.constructionMsLeft = 0;
+      if (b.ownerId === localPlayerId) {
+        const def = BuildingDefs[b.type];
+        logMsg(`Построено: ${def ? def.label : b.type}`);
+      }
+    }
+  });
+}
+
 function gameTick(dtMs) {
   State.tick++;
+
+  updateConstruction(dtMs);
 
   // Движение юнитов
   // ИИ №29: юнит worker и его states "moving-to-harvest"/"returning"
@@ -187,7 +220,16 @@ const CHASE_LEASH_RADIUS = 190;
 // отдельного "разбудить юнита" кода — attackMoveMode и так уже true.
 
 function findAttackableAt(id) {
-  return State.units[id] || State.buildings[id] || null;
+  const unit = State.units[id];
+  if (unit) return unit;
+  const building = State.buildings[id];
+  if (!building) return null;
+  // ИИ №46: призрачная стена не может БЫТЬ целью атаки вовсе (не только не
+  // выбирается автопоиском, см. findNearestEnemyInRange выше, но и не
+  // подтверждается как валидная явная цель) — единая точка, через которую
+  // и updateCombat, и updateDefensiveStructures резолвят attackTargetId.
+  if (building.type === "wall" && building.constructionMsLeft > 0) return null;
+  return building;
 }
 
 function isEnemyOf(ownerId, otherOwnerId) {
@@ -205,6 +247,13 @@ function findNearestEnemyInRange(u, range) {
   Object.values(State.buildings).forEach(other => {
     if (other.hp <= 0) return;
     if (!isEnemyOf(u.ownerId, other.ownerId)) return;
+    // ИИ №46 (по прямому запросу пользователя: "стен вообще будто и нету
+    // пока 1 секунда не пройдёт") — призрачная (ещё строящаяся) стена не
+    // может быть найдена автопоиском ни юнитом, ни турелью, чтобы её не
+    // пытались атаковать, пока она физически не появилась. Обычные строящиеся
+    // здания НАМЕРЕННО остаются доступной целью — только "здание не рабочее",
+    // атаковать его можно (см. запрос пользователя дословно).
+    if (other.type === "wall" && other.constructionMsLeft > 0) return;
     const d = dist(u.x, u.y, other.x, other.y);
     if (d <= range && d < bestD) { best = other; bestD = d; }
   });
@@ -356,6 +405,10 @@ function updateDefensiveStructures(dtMs) {
   Object.values(State.buildings).forEach(b => {
     const def = BuildingDefs[b.type];
     if (!def || !def.canAttack) return;
+    // ИИ №46 (по прямому запросу пользователя, "пока строится здание...
+    // само здание не рабочее") — строящаяся турель не стреляет, даже если
+    // враг уже стоит в её будущем радиусе.
+    if (b.constructionMsLeft > 0) return;
     if (b.attackCooldownLeft == null) b.attackCooldownLeft = 0;
     if (b.attackCooldownLeft > 0) b.attackCooldownLeft -= dtMs;
 
@@ -578,6 +631,11 @@ function updatePowerAndUnitCounts() {
   Object.values(State.players).forEach(p => {
     let power = 0, use = 0;
     Object.values(State.buildings).filter(b => b.ownerId === p.id).forEach(b => {
+      // ИИ №46: строящееся здание ещё не рабочее — не даёт и не потребляет
+      // питание, пока не достроено (иначе, например, недостроенная
+      // электростанция уже "включалась" бы, а недостроенная казарма уже
+      // "жрала" бы питание впустую).
+      if (b.constructionMsLeft > 0) return;
       const def = BuildingDefs[b.type];
       if (def) { power += def.producesPower || 0; use += def.powerUse || 0; }
     });
