@@ -94,9 +94,9 @@ function mortarCostForDamage(dmg) {
 }
 const MORTAR_DAMAGE = 34; // урон снаряда мортиры за выстрел (in-range всей splash-зоны получает этот урон)
 BuildingDefs.mortar = {
-  label: "Мортира", cost: mortarCostForDamage(MORTAR_DAMAGE), hp: 380, maxHp: 380, w: 2, h: 2,
+  label: "Мортира", cost: mortarCostForDamage(MORTAR_DAMAGE), hp: 150, maxHp: 150, w: 2, h: 2,
   producesPower: 0, powerUse: 25, buildTime: 9000,
-  canAttack: true, attackRange: 240, attackDamage: MORTAR_DAMAGE, attackCooldown: 2400,
+  canAttack: true, attackRange: 240, attackDamage: MORTAR_DAMAGE, attackCooldown: 4000,
   // ИИ №47: attackCooldown заметно длиннее turret (900) — площадное оружие
   // не должно стрелять так же часто, иначе перекрывает турель по всем
   // параметрам сразу (цена компенсируется реже, а не только дороже).
