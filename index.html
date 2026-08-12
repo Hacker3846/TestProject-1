@@ -1055,5 +1055,29 @@
 <script src="js/21-ai-base-strategy.js"></script>
 <script src="js/22-turret-grudge.js"></script>
 <script src="js/23-map-bounds.js"></script>
+<script src="js/24-quadrant-restriction.js"></script>
+<script src="js/25-mortar-and-mines.js"></script>
+<!-- ИИ №48: экономика обороны ИИ (стены/турели/мортиры/мины) теперь
+     привязана к реальной причине защищаться, а не растёт слепо от размера
+     базы — см. подробный комментарий в шапке файла. Подключать ПОСЛЕДНИМ,
+     после 25-mortar-and-mines.js (патчит функции из 06/18/19/21/25). -->
+<script src="js/26-ai-defense-economy-throttle.js"></script>
+<!-- ИИ №49: активная защита живой силой — при оправданной причине
+     (enemyDefenseJustified, 26-...js) ИИ теперь реально отзывает часть
+     боевых юнитов (из простоя у любого здания базы и, при достаточно
+     серьёзном вторжении, частично из штурмующей ATTACK-армии) и
+     направляет их НАВСТРЕЧУ угрожаемой постройке, а не только пассивно
+     ждёт за турелями/стенами. Подключать ПОСЛЕДНИМ, после
+     26-ai-defense-economy-throttle.js (переиспользует её enemyDefenseJustified/
+     ENEMY_THREAT_PROXIMITY_RADIUS как единый источник истины про "есть ли
+     причина защищаться"). -->
+<script src="js/27-ai-active-defense-tactics.js"></script>
+<!-- ИИ №50: в начале партии (пока refinery ещё не разогнана до цели
+     ENEMY_REFINERY_TARGET, 06-enemy-ai.js) стены/турели/мортиры/мины
+     урезаны ЕЩЁ ниже базового уровня 26-й сессии — доход в приоритете,
+     пока экономика не встала на ноги. Реальная угроза (enemyDefenseJustified)
+     по-прежнему пробивает этот урезанный потолок. Подключать ПОСЛЕДНИМ,
+     после 26-ai-defense-economy-throttle.js. -->
+<script src="js/28-ai-early-economy-priority.js"></script>
 </body>
-</html>
+        </html>
