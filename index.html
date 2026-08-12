@@ -1072,12 +1072,19 @@
      ENEMY_THREAT_PROXIMITY_RADIUS как единый источник истины про "есть ли
      причина защищаться"). -->
 <script src="js/27-ai-active-defense-tactics.js"></script>
-<!-- ИИ №50: в начале партии (пока refinery ещё не разогнана до цели
-     ENEMY_REFINERY_TARGET, 06-enemy-ai.js) стены/турели/мортиры/мины
-     урезаны ЕЩЁ ниже базового уровня 26-й сессии — доход в приоритете,
-     пока экономика не встала на ноги. Реальная угроза (enemyDefenseJustified)
-     по-прежнему пробивает этот урезанный потолок. Подключать ПОСЛЕДНИМ,
-     после 26-ai-defense-economy-throttle.js. -->
-<script src="js/28-ai-early-economy-priority.js"></script>
+<!-- ИИ №50: юниты игрока (симметрично и вражеский ИИ, т.к. общий код) не
+     игнорируют вражеских юнитов при явном приказе атаки на здание — см.
+     подробный комментарий в шапке файла. Патчит updateCombat. -->
+<script src="js/28-units-engage-enemies-enroute.js"></script>
+<!-- ИИ №51: заходить в зазор стены рядом, иначе ломать её, а не обходить —
+     см. подробный комментарий в шапке файла. Патчит setUnitDestination.
+     Подключать после 28-units-engage-enemies-enroute.js. -->
+<script src="js/29-wall-breach-or-detour.js"></script>
+<!-- ИИ №52: приоритет "сначала все опасные точки рядом, штаб — когда угроз
+     не осталось" — см. подробный комментарий в шапке файла. Патчит
+     findNearestEnemyInRange (поверх уже пропатченной 19-...js версии) и
+     enemyAttackStep. Подключать последним, после
+     29-wall-breach-or-detour.js. -->
+<script src="js/30-ai-danger-priority.js"></script>
 </body>
-        </html>
+</html>
