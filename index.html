@@ -1020,6 +1020,19 @@
         ⚡ Совет ИИ-командующего
       </button>
       <div id="aiAdviceOutput" style="margin-top:6px;font-size:11px;color:var(--text-dim);line-height:1.4;"></div>
+      <!-- ИИ №48: кнопка скрытия/показа журнала боевых сообщений (#log —
+           лог "Строится: ...", "Мина-ловушка сработала", атаки врага и т.д.,
+           см. logMsg в 05-init-world.js). По прямому запросу пользователя
+           размещена в той же панели ВЫДЕЛЕНИЕ, что и "Совет ИИ-командующего"
+           выше. Стили инлайн по тому же принципу, что и у aiAdviceBtn —
+           единственная кнопка такого рода, отдельный CSS-класс избыточен.
+           Обработчик клика и сам toggle — js/31-mortar-mine-balance-and-chat-toggle.js
+           (текст/состояние кнопки переключаются оттуда, не отсюда). -->
+      <button id="toggleChatLogBtn" type="button" style="width:100%;margin-top:6px;font-family:var(--mono);font-size:11px;
+        padding:8px 6px;border:1px solid var(--hud-line);background:linear-gradient(180deg,#212b1a,#181f13);color:var(--accent-gdi);
+        cursor:pointer;text-transform:uppercase;letter-spacing:.5px;border-radius:2px;">
+        🗨 Скрыть чат
+      </button>
     </div>
   </div>
 </div>
@@ -1086,5 +1099,6 @@
      enemyAttackStep. Подключать последним, после
      29-wall-breach-or-detour.js. -->
 <script src="js/30-ai-danger-priority.js"></script>
+<script src="js/31-mortar-mine-balance-and-chat-toggle.js"></script>
 </body>
 </html>
