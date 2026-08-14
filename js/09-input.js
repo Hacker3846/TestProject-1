@@ -176,6 +176,56 @@ viewport.addEventListener("contextmenu", (e) => {
 });
 
 /* ================================================================
+   ПРОДАЖА ЗДАНИЙ ДВОЙНЫМ КЛИКОМ/ТАПОМ (по прямому запросу пользователя:
+   "сделай чтобы продавались все здания, а также возвращалась 30% цены") —
+   продаются ЛЮБЫЕ свои здания, КРОМЕ штаба (commandCenter): штаб — единственное
+   здание, которое нельзя ни построить вручную, ни потерять добровольно, иначе
+   игрок может остаться без базы одним двойным кликом/тапом.
+   ================================================================ */
+const SELL_EXCLUDED_BUILDING_TYPES = ["commandCenter"];
+const SELL_REFUND_RATIO = 0.3; // при продаже возвращается 30% стоимости постройки
+
+// Тот же AABB-хиттест по зданию, что уже используется выше в этом файле
+// (mouseup-обработчик рамки-клика, contextmenu, selectAtScreenPoint/
+// issueOrderAtWorldPoint в тач-блоке ниже) — просто отфильтрован по
+// владельцу и по списку исключённых из продажи типов.
+function findOwnSellableBuildingAtWorld(worldX, worldY) {
+  return Object.values(State.buildings).find(b => {
+    if (b.ownerId !== localPlayerId) return false;
+    if (SELL_EXCLUDED_BUILDING_TYPES.includes(b.type)) return false;
+    const def = BuildingDefs[b.type];
+    const halfW = def.w * GameConfig.tileSize / 2, halfH = def.h * GameConfig.tileSize / 2;
+    return Math.abs(worldX - b.x) <= halfW && Math.abs(worldY - b.y) <= halfH;
+  });
+}
+
+// Продаёт здание: убирает его из State НАПРЯМУЮ, без killBuilding
+// (07-game-loop-combat.js). killBuilding намеренно не переиспользуется —
+// она помечена как "уничтожено" для статистики боя (13b-battle-stats.js,
+// playerBuildingsLost++) и включает взрыв/тряску камеры (08-render.js,
+// хук hookDeathEffects) — то и другое уместно для гибели в бою, но не для
+// добровольной продажи игроком собственной постройки.
+function sellBuilding(b) {
+  const def = BuildingDefs[b.type];
+  const player = State.players[b.ownerId];
+  const refund = Math.round((def ? def.cost : 0) * SELL_REFUND_RATIO);
+  if (player) player.credits += refund;
+  State.selection.delete(b.id);
+  delete State.buildings[b.id];
+  logMsg(`Продано: ${def ? def.label : b.type} (+${refund} кр.)`);
+  renderSelectionPanel();
+}
+
+// Десктоп: обычный двойной клик мышью по своей стене/заводу.
+viewport.addEventListener("dblclick", (e) => {
+  if (State.buildMode) return; // в режиме размещения здания двойной клик не должен продавать постройки
+  const rect = viewport.getBoundingClientRect();
+  const world = screenToWorldZoomed(e.clientX - rect.left, e.clientY - rect.top);
+  const target = findOwnSellableBuildingAtWorld(world.x, world.y);
+  if (target) sellBuilding(target);
+});
+
+/* ================================================================
    МОБИЛЬНОЕ ТАЧ-УПРАВЛЕНИЕ
    Не трогает ни одной строки логики выше — переиспользует те же функции
    (setUnitDestination, confirmBuildPlacement, isBuildPlacementValid и
@@ -440,6 +490,18 @@ viewport.addEventListener("contextmenu", (e) => {
       const now = Date.now();
       const isDoubleTap = lastTapPos && (now - lastTapTime) < DOUBLE_TAP_MS && dist(lastTapPos.x, lastTapPos.y, touchStart.x, touchStart.y) < 24;
       lastTapTime = now; lastTapPos = { x: touchStart.x, y: touchStart.y };
+
+      // Двойной тап по своей стене/заводу техники — продажа (мобильный
+      // эквивалент dblclick мышью выше в этом файле).
+      if (isDoubleTap) {
+        const world = screenToWorldZoomed(touchStart.x, touchStart.y);
+        const target = findOwnSellableBuildingAtWorld(world.x, world.y);
+        if (target) {
+          sellBuilding(target);
+          touchMode = null; touchStart = null;
+          return;
+        }
+      }
 
       if (State.selection.size > 0) {
         // Если тап попал по своему юниту/зданию — переключаем выделение

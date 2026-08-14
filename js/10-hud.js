@@ -309,6 +309,14 @@ function refreshUnitLockState() {
 // если игрок потратил кредиты на что-то другое, пока целился.
 function tryStartBuilding(key) {
   if (key === "commandCenter") return; // штаб не строится вручную
+  // По прямому запросу пользователя: повторный клик по УЖЕ выбранной
+  // карточке здания отменяет выбор (равносильно ПКМ/Esc), а не переоткрывает
+  // тот же режим размещения заново.
+  if (State.buildMode && State.buildMode.type === key) {
+    cancelBuildMode();
+    logMsg("Размещение отменено");
+    return;
+  }
   const def = BuildingDefs[key];
   const player = State.players[localPlayerId];
   // ИИ №46 (по прямому запросу пользователя, "лимит турелей 20") — проверяем
